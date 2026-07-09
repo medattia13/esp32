@@ -1,0 +1,28 @@
+# Qt Creator
+*.user
+
+# Build directories
+build/
+bin/
+out/
+
+# Object files
+*.o
+*.obj
+
+# Executables
+*.exe
+*.out
+
+# Libraries
+*.a
+*.so
+*.dll
+*.dylib
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+compile_commands.json
