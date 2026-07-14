@@ -1,5 +1,4 @@
 #include <HardwareSerial.h>
-//HardwareSerial sim800(1);
 HardwareSerial sim800(2);
 const int ledPin = 2;   // Change to your LED pin
 unsigned long lastCheck = 0;
