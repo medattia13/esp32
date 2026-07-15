@@ -2,61 +2,26 @@
 ///remove delays is okay during startup, but a cleaner approach is to wait for responses from SIM800.
 // add exception handling, eg esp initilization timer for relay time settings make sure old SMS are deleted
 HardwareSerial sim800(2);
-
 const int relayPin = 23;
 // State changes variables
 bool blinkMode = false;
 bool relayState = false;
+bool waitingForSMSBody = false;
 unsigned long previousMillis = 0;
 const unsigned long interval = 3000;
-const char phoneNumber[] = "98267980"; //C-style strings (better for memory) Your controller is going to run continuously. 
+const char phoneNumber[] = "XXXXXXX"; //C-style strings (better for memory) Your controller is going to run continuously. 
+const char authorizedNumber[] = "XXXXXXX"; //C-style strings (better for memory) Your controller is going to run continuously. 
+
 //A SIM800 relay controller might stay powered for months, so avoiding unnecessary String operations is better.
 // Buffer for incoming SMS lines
 String incomingLine = "";
-//timer variables
-bool timerEnabled = false;
-
-int onHour = 18;
-int onMinute = 30;
-
-int offHour = 23;
-int offMinute = 0;
-
-int currentHour = 0;
-int currentMinute = 0;
-
+bool networkRegistered = false;
+unsigned long lastCheck = 0;
+const unsigned long CHECK_INTERVAL = 10000;
 unsigned long lastTimeCheck = 0;
-void getNetworkTime() {
-
-  sim800.println("AT+CCLK?");
-
-  delay(1000);
-
-  while(sim800.available()) {
-
-    String response = sim800.readString();
-
-    Serial.println(response);
-
-    int index = response.indexOf("\"");
-
-    if(index > 0) {
-
-      String datetime = response.substring(index+1,index+20);
-
-      Serial.println("Time: " + datetime);
-
-      currentHour = datetime.substring(9,11).toInt();
-      currentMinute = datetime.substring(12,14).toInt();
-
-      Serial.print("Hour:");
-      Serial.println(currentHour);
-
-      Serial.print("Minute:");
-      Serial.println(currentMinute);
-    }
-  }
-}
+String reg = "";
+bool registrationHandled = false;
+String smsSender = "";
 void printState() {
   Serial.println("----- State Changed -----");
   Serial.print("Blink mode: ");
@@ -67,53 +32,129 @@ void printState() {
   Serial.println(digitalRead(relayPin));
   Serial.println();
 }
+bool waitForPrompt(unsigned long timeout = 5000) {
+
+    unsigned long start = millis();
+
+    while (millis() - start < timeout) {
+
+        while (sim800.available()) {
+
+            char c = sim800.read();
+
+            Serial.write(c);   // Optional: show modem output
+
+            if (c == '>') {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
 void sendSMS(String message) {
 
-  sim800.print("AT+CMGS=\"");
-  sim800.print(phoneNumber);
-  sim800.println("\"");
-  delay(1000);
-  sim800.print(message);
-  delay(500);
+    if (!networkRegistered)
+        return;
+    sim800.print("AT+CMGS=\"");
+    sim800.print(phoneNumber);
+    sim800.println("\"");
 
-  sim800.write(26);// CTRL+Z to send SMS
-  delay(5000);
+    if (!waitForPrompt()) {
+        Serial.println("SMS prompt timeout");
+        return;
+    }
+    sim800.print(message);
+    sim800.write(26);      // Ctrl+Z
+    delay(5000);
+}
+
+String sendAT(String cmd) {
+    while (sim800.available()) {
+        sim800.read();
+    }
+    Serial.print("TX: ");
+    Serial.println(cmd);
+    sim800.println(cmd);
+    String response = "";
+    unsigned long start = millis();
+    while (millis() - start < 3000) {
+        while (sim800.available()) {
+            response += (char)sim800.read();
+        }
+        if (response.indexOf("OK") >= 0 ||
+            response.indexOf("ERROR") >= 0) {
+            break;
+        }
+    }
+    Serial.println("RX:");
+    Serial.println(response);
+    return response;
+}
+void setRelay(bool state) {
+    if (relayState == state)
+        return;
+    relayState = state;
+    digitalWrite(relayPin, state ? HIGH : LOW);
 }
 void setup() {
+  //initilization
+  blinkMode = false;
+  relayState = false;
   pinMode(relayPin, OUTPUT);
   digitalWrite(relayPin, LOW);
   Serial.begin(115200);
   sim800.begin(9600, SERIAL_8N1, 16, 17);
-  delay(300);
-  /* enabling time synchronisation
-sim800.println("AT+CLTS=1"); //AT+CLTS=1 enables network time synchronization.
-delay(1000);
+  Serial.println("Waiting for SIM800...");
+  while (true) {
+    String r = sendAT("AT");
+    if (r.indexOf("OK") >= 0) {
+        break;
+    }
 
-sim800.println("AT&W");
-delay(1000);*/
-  // Basic SIM800 setup
-  sim800.println("AT");
-  delay(500);
-  sim800.println("AT+CPIN?");
-  delay(500);
-  sim800.println("AT+CSQ"); //Check signal quality
-  delay(500);
-  sim800.println("AT+CREG?"); //Check network registration
-  delay(500);
-  sim800.println("AT+CMGF=1");      // CMGF means Cellular Message Format SMS text mode
-  delay(500);
-  sim800.println("AT+CNMI=2,2,0,0,0"); // Forward SMS directly to serial
-  delay(500);
+    delay(1000);
+  }
+  Serial.println("SIM800 Ready");  // Basic SIM800 setup
+  sendAT("AT+CPIN?");
+  sendAT("AT+CSQ"); //Check signal quality
+  while (true) {
+    String r = sendAT("AT+CREG?");
+    if (r.indexOf(",1") >= 0 ||
+        r.indexOf(",5") >= 0) {
+        break;
+    }
+    Serial.println("Waiting for network...");
+    delay(2000);
+  }
+  Serial.println("Network Registered");  
+  networkRegistered = true;
+  registrationHandled = true;
+  sendAT("AT+CMGF=1");      // CMGF means Cellular Message Format SMS text mode
+  sendAT("AT+CMGD=1,4");  //deletes all old sms
+  sendAT("AT+CNMI=2,2,0,0,0"); // Forward SMS directly to serial
   Serial.println("System Ready");
 }
 
 void loop() {
+        // Check registration every 10 seconds
+  /* if (millis() - lastCheck >= CHECK_INTERVAL) {
+    lastCheck = millis();
+    reg = sendAT("AT+CREG?");
+    networkRegistered =(reg.indexOf(",1") >= 0 || reg.indexOf(",5") >= 0);
+   if (networkRegistered && !registrationHandled) {
+      registrationHandled = true;
+      Serial.println("Network Registered");
+    }
+    else if (!networkRegistered && registrationHandled) {
+      registrationHandled = false;
+      Serial.println("Network Lost");
+    }
+  }*/
   // -----------------------------
   // Read SIM800 data line by line
   // -----------------------------
   while (sim800.available()) {
     char c = sim800.read(); //Reads data incrementally 
-
     if (c == '\r') {
       continue;// SIM800 lines usually end with \r\n so we ignore carriage return
     }
@@ -123,68 +164,84 @@ void loop() {
         incomingLine = "";
         continue;
       }
-      incomingLine.toUpperCase();
-      /*if (incomingLine.startsWith("+")) {
-        incomingLine = "";
-        continue;
-      }*/
-      Serial.println("RX: " + incomingLine);
+        Serial.println("LINE: " + incomingLine);
+              // Detect SMS header
+        if (incomingLine.startsWith("+CMT:")) {
+
+
+            int firstQuote = incomingLine.indexOf('"');
+            int secondQuote = incomingLine.indexOf('"', firstQuote + 1);
+
+            if (firstQuote >= 0 && secondQuote > firstQuote) {
+
+                smsSender = incomingLine.substring(
+                    firstQuote + 1,
+                    secondQuote
+                );
+
+                Serial.print("SMS sender: ");
+                Serial.println(smsSender);
+            }
+                        waitingForSMSBody = true;
+                                    incomingLine = "";
+            continue;
+        }
+        // This is the SMS body
+        //incomingLine.toUpperCase();
+          //      Serial.println("COMMAND: " + incomingLine);
+  //  continue;   // wait for SMS body
+        /*if (smsSender != authorizedNumber) {
+
+            Serial.println("Unauthorized SMS ignored");
+
+            incomingLine = "";
+            smsSender = "";
+            continue;
+        }*/
+           // SMS body
+        if (waitingForSMSBody) {
+
+            waitingForSMSBody = false;
+
+            incomingLine.toUpperCase();
+
+            Serial.println("COMMAND: " + incomingLine);
       // -----------------------------
       // Command handling
       // -----------------------------
       if (incomingLine == "ON") {
         blinkMode = false;
-        relayState = true;
-        digitalWrite(relayPin, HIGH);
+setRelay(true);
         printState();
         sendSMS("Relay is ON");
       }
       else if (incomingLine == "OFF") {
         blinkMode = false;
-        relayState = false;
-        digitalWrite(relayPin, LOW);
+setRelay(false);
         printState();
         sendSMS("Relay OFF");
       }
       else if (incomingLine == "BLINK") {
+        if (!blinkMode) {
         blinkMode = true;
-        relayState = true;
-        digitalWrite(relayPin, HIGH);
+     setRelay(true);
         previousMillis = millis();
         printState();
         sendSMS("Blink mode started");
+        }
       }
-      else if (incomingLine == "STOP") {
+else if (incomingLine == "STOP") {
+
+    if (blinkMode || relayState) {
+
         blinkMode = false;
-        relayState = false;
-        digitalWrite(relayPin, LOW);
+setRelay(false);
+
         printState();
         sendSMS("Blink mode stopped");
-      }
-      //used fo timer
-       
-       else if(incomingLine=="TIMER ON") {
-        timerEnabled=true;
-    sendSMS("Timer enabled");
-
     }
-
-     else if(incomingLine=="TIMER OFF") {
- timerEnabled=false;
- sendSMS("Timer disabled");
 }
-else if(incomingLine=="TIME") {
- getNetworkTime();
-
- String msg="Time ";
- msg += String(currentHour);
- msg += ":";
- msg += String(currentMinute);
-
- sendSMS(msg);
-
-}
-      incomingLine = "";
+    incomingLine = "";
     }
     else {
       if (incomingLine.length() < 100) {
@@ -192,39 +249,15 @@ else if(incomingLine=="TIME") {
       }
     }
   }
-  // -----------------------------
+
+  }
+    // -----------------------------
   // Blink mode handler
   // -----------------------------
   if (blinkMode && millis() - previousMillis >= interval) {
       previousMillis = millis();
-      relayState = !relayState;
-      digitalWrite(relayPin, relayState);
+      
+    setRelay(!relayState);   // toggle relay state
       printState();
-  }
-  if(timerEnabled && millis() - lastTimeCheck > 60000){
-
-  lastTimeCheck = millis();
-
-  getNetworkTime();
-
-
-  if(currentHour == onHour &&
-     currentMinute == onMinute){
-
-      relayState = true;
-      digitalWrite(relayPin,HIGH);
-
-      sendSMS("Timer: Relay ON");
-  }
-
-
-  if(currentHour == offHour &&
-     currentMinute == offMinute){
-
-      relayState = false;
-      digitalWrite(relayPin,LOW);
-
-      sendSMS("Timer: Relay OFF");
-  }
-}
+    }
 }

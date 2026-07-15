@@ -20,7 +20,7 @@ void setup() {
   delay(3000);
   sendAT("AT");
   sendAT("ATE0");
-  // Enable network time sync
+  // Enable network time sync  
   Serial.println("Enabling network time...");
   sendAT("AT+CLTS=1");
   // Save setting
@@ -65,7 +65,11 @@ void loop() {
                 Serial.println("================================");
                 Serial.println("NETWORK REGISTERED");
                 Serial.println("================================");
-
+  Serial.println("Does network prove nitz time...");
+  sendAT("AT+CLTS?");
+    delay(30000);
+  sendAT("AT+CCLK?");
+    delay(30000);      // wait 30 seconds for NITZ
                 showNetworkTime();
 
                 Serial.println("Turning relay ON for 1 minute");
