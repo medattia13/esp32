@@ -1,4 +1,5 @@
 //TODO//
+// character analysis to understand the issue when reading from sil800
 ///remove delays is okay during startup, but a cleaner approach is to wait for responses from SIM800.
 // add exception handling, eg esp initilization timer for relay time settings make sure old SMS are deleted
 //A SIM800 relay controller might stay powered for months, so avoiding unnecessary String operations is better.
