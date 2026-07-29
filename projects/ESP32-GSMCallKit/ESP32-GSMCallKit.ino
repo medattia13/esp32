@@ -1,8 +1,5 @@
-// TODO: 
-//Replace String with fixed-size char[] buffers to reduce heap allocations.
 // callActive logic has one limitation A future version should parse modem responses:
 //Replace delay() during modem boot (optional
-//REMEMBER to git push -u origin feature/remove-string beacause you're in new branch the simply use push then tere'll be merge
 #include <HardwareSerial.h>
         input[len] = '\0';
 HardwareSerial sim800(2); // UART2 used for SIM800 communication
