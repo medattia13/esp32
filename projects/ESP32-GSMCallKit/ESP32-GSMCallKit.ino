@@ -2,7 +2,9 @@
 //Replace String with fixed-size char[] buffers to reduce heap allocations.
 // callActive logic has one limitation A future version should parse modem responses:
 //Replace delay() during modem boot (optional
+//REMEMBER to git push -u origin feature/remove-string beacause you're in new branch the simply use push then tere'll be merge
 #include <HardwareSerial.h>
+        input[len] = '\0';
 HardwareSerial sim800(2); // UART2 used for SIM800 communication
 // ESP32 pins
 #define SIM800_RX 16
@@ -10,31 +12,36 @@ HardwareSerial sim800(2); // UART2 used for SIM800 communication
 const uint32_t SERIAL_BAUD = 115200;
 const uint32_t MODEM_BAUD = 9600;
 const uint32_t MODEM_BOOT_TIME = 5000;
+constexpr size_t PHONE_BUF_SIZE = 32;
 bool callActive = false;
 void printSIM800Response() {
     while (sim800.available()) {
         Serial.write(sim800.read());
     }
 }
-void callNumber(const String &number) {
+void callNumber(const char *number) {
     sim800.print("ATD");
     sim800.print(number);
     sim800.println(";");
 }
 // Validate an international phone number (+ followed by digits).
-bool validNumber(const String &num) {
-    if (!num.startsWith("+"))
+bool validNumber(const char *num)
+{
+    if (num == nullptr)
         return false;
-    if (num.length() < 2)
+    if (num[0] != '+')
         return false;
-    for (size_t i = 1; i < num.length(); i++) {
-        if (!isDigit(num[i]))
+    if (strlen(num) < 2)
+        return false;
+    for (size_t i = 1; num[i] != '\0'; i++)
+    {
+        if (!isdigit((unsigned char)num[i]))
             return false;
     }
     return true;
 }
 // Send an AT command and print the modem response.
-void sendAT(const String &cmd, uint32_t waitTime = 1000) {
+void sendAT(const char *cmd, uint32_t waitTime = 1000) {
     Serial.print(">> ");
     Serial.println(cmd);
     sim800.println(cmd);
@@ -61,16 +68,22 @@ void setup() {
 }
 void loop() {
   if (Serial.available()) {
-    String input = Serial.readStringUntil('\n');
+    char input[PHONE_BUF_SIZE];    
     input.trim();
-    if (input.equalsIgnoreCase("H")) {
-        if (callActive) {
-            sim800.println("ATH");
-            callActive = false;
-            Serial.println("Call ended.");
-        }
-    } else if (validNumber(input)) {
+    size_t len = Serial.readBytesUntil('\n', input, PHONE_BUF_SIZE - 1);
+    input[len] = '\0'; // the infamous null terminator
+    while (len>0 && (input[len-1]=='\r' || input[len-1] == '\n')){
+      input[--len] = '\0';
+    }
+    if (strcasecmp(input, "H") == 0)
+    {
       if (callActive) {
+        sim800.println("ATH");
+        callActive = false;
+        Serial.println("Call ended.");
+      }
+    } else if (validNumber(input)) {
+        if (callActive) {
         Serial.println("A call is already in progress.");
         return;
       }
