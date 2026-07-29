@@ -1,7 +1,8 @@
 // callActive logic has one limitation A future version should parse modem responses:
 //Replace delay() during modem boot (optional
 #include <HardwareSerial.h>
-        input[len] = '\0';
+#include <ctype.h>
+#include <string.h>
 HardwareSerial sim800(2); // UART2 used for SIM800 communication
 // ESP32 pins
 #define SIM800_RX 16
