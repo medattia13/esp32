@@ -1,16 +1,21 @@
 // TODO:
-// 1. Replace blocking delay() during modem boot with millis timer.
+// 1. Remove callActive tracking.
+//    Use ModemState:
+//    READY
+//    DIALING
+//    IN_CALL
 //
-// 2. Replace manual callActive tracking.
-//    Parse SIM800 responses:
-//    OK
+// 2. Create proper modem response parser.
+//    Handle unsolicited responses:
+//    CONNECT
 //    NO CARRIER
 //    BUSY
 //    RING
 //
-// 3. Create modem response parser/state machine.
+// 3. Separate command responses from unsolicited modem events.
+//    Prevent sendAT() and response parser from competing for UART.
 //
-// 4. Improve command handling with AT command timeout/error handling.
+// 4. Replace blocking sendAT() with asynchronous AT command handling.
 //
 // 5. Move serial input cleanup into separate function.
 //
@@ -45,30 +50,104 @@ const uint32_t MODEM_BAUD = 9600;
 const uint32_t MODEM_BOOT_TIME = 5000;
 constexpr size_t PHONE_BUF_SIZE = 32;
 ModemState modemState = BOOTING;
-char modemResponse[128];
-bool modemInitialized = false;
 unsigned long bootStart;
-bool callActive = false;
-void readSIM800Response(char *buffer, size_t size) {
-  size_t index = strlen(buffer);
-  while (sim800.available()) {
-    char c = sim800.read();
-    if (index < size - 1) {
-      buffer[index++] = c;
-      buffer[index] = '\0';
+char lineBuffer[128];
+size_t linePos = 0;
+static uint8_t bootStep = 0;
+bool incomingCall = false;
+struct ATCommand
+{
+    bool active = false;
+    bool finished = false;
+    ATResult result = AT_TIMEOUT;
+
+    char response[256] = {0};
+    size_t length = 0;
+uint32_t timeout=1000;
+    uint32_t startTime = 0;
+};
+
+ATCommand atCommand;
+bool isEvent(const char *line)
+{
+    return
+        !strcmp(line,"CONNECT") ||
+        !strcmp(line,"NO CARRIER") ||
+        !strcmp(line,"BUSY") ||
+        !strcmp(line,"RING");
+}
+void processLine(const char *line){
+  Serial.print("<< ");
+  Serial.println(line);
+    // Unsolicited events
+  if (strcmp(line, "CONNECT") == 0){
+    modemState = IN_CALL;
+        atCommand.active = false;
+    atCommand.finished = true;
+    atCommand.result = AT_OK;
+    return;
+  }
+  else if (strcmp(line, "NO CARRIER") == 0){
+    modemState = READY;
+    atCommand.active = false;
+    atCommand.finished = true;
+    atCommand.result = AT_ERROR;
+    return;
+  }
+  else if (strcmp(line, "BUSY") == 0){
+    modemState = READY;
+    
+    atCommand.active = false;
+    atCommand.finished = true;
+    atCommand.result = AT_ERROR;
+    return;
+  }
+  else if (strcmp(line, "RING") == 0){
+        incomingCall = true;
+    Serial.println("Incoming call");
+    return;
+  }  
+  // AT command final responses
+  if (strcmp(line, "OK") == 0){
+    atCommand.active = false;
+    atCommand.finished = true;
+    atCommand.result = AT_OK;
+    return;
+  }
+  if (strcmp(line, "ERROR") == 0){
+    atCommand.active = false;
+    atCommand.finished = true;
+    atCommand.result = AT_ERROR;
+    return;
+  }
+    // Normal command response
+  if (atCommand.active){
+    size_t len = strlen(line);
+    if (atCommand.length + len + 2 < sizeof(atCommand.response)){
+      strcpy(&atCommand.response[atCommand.length], line);
+      atCommand.length += len;
+      atCommand.response[atCommand.length++] = '\n';
+      atCommand.response[atCommand.length] = '\0';
     }
   }
+
 }
-//debug only
-void printSIM800Response() {
-    while (sim800.available()) {
-        Serial.write(sim800.read());
+void processSerial(){
+  while (sim800.available()){
+    char c = sim800.read();
+    if (c == '\r')
+      continue;
+    if (c == '\n'){
+      if (linePos) {
+        lineBuffer[linePos] = 0;
+        processLine(lineBuffer);
+        linePos = 0;
+      }
     }
-}
-void callNumber(const char *number) {
-    sim800.print("ATD");
-    sim800.print(number);
-    sim800.println(";");
+    else if (linePos < sizeof(lineBuffer) - 1){
+      lineBuffer[linePos++] = c;
+    }
+  }
 }
 // Validate an international phone number (+ followed by digits).
 bool validNumber(const char *num)
@@ -79,149 +158,294 @@ bool validNumber(const char *num)
         return false;
     if (strlen(num) < 2)
         return false;
-    for (size_t i = 1; num[i] != '\0'; i++)
-    {
-        if (!isdigit((unsigned char)num[i]))
-            return false;
+    for (size_t i = 1; num[i] != '\0'; i++){
+      if (!isdigit((unsigned char)num[i]))
+        return false;
     }
     return true;
 }
-// Send an AT command and print the modem response.
-ATResult sendAT(const char *cmd,char *response,size_t responseSize,uint32_t waitTime = 1000){
+// Send an AT command
+bool sendAT(const char *cmd, uint32_t timeout=1000){
+  if (atCommand.active){
+        Serial.println("AT command busy");
+            return false; // Another command is running
+
+  }
+  atCommand.active = true;
+  atCommand.finished = false;
+  atCommand.result = AT_TIMEOUT;
+  atCommand.length = 0;
+  atCommand.response[0] = '\0';
+  atCommand.startTime = millis();
+      atCommand.timeout = timeout;
   Serial.print(">> ");
   Serial.println(cmd);
   sim800.println(cmd);
-  size_t index = 0;
-  unsigned long start = millis();
-  while (millis() - start < waitTime){
-    while (sim800.available()){
-      char c = sim800.read();
-      Serial.write(c);   // optional debug output
-      if (index < responseSize - 1){
-        response[index++] = c;
-        response[index] = '\0';
-      }
-    }
-    // Stop early if we received a final response
-        if (strstr(response, "OK")){
-            return AT_OK;
-        }
-        if (strstr(response, "ERROR")){
-            return AT_ERROR;
-        }
+  return true;
+}
+
+bool atFinished()
+{
+    return atCommand.finished;
+}
+
+ATResult atResult()
+{
+    return atCommand.result;
+}
+
+void checkATTimeout(){
+  if (!atCommand.active)
+    return;
+  if (millis() - atCommand.startTime > atCommand.timeout){
+    atCommand.active = false;
+    atCommand.finished = true;
+    atCommand.result = AT_TIMEOUT;
+    Serial.println("AT command timeout");
   }
-  return AT_TIMEOUT;
 }
 void setup() {
   Serial.begin(SERIAL_BAUD);
   sim800.begin(MODEM_BAUD, SERIAL_8N1, SIM800_RX, SIM800_TX);
-  bootStart = millis();
-}
-void loop() {
-  switch (modemState) {
-    case BOOTING: {
-      if (millis() - bootStart >= MODEM_BOOT_TIME) {
-        ATResult result = sendAT("AT", modemResponse, sizeof(response));
-        switch (result) {
-          case AT_OK:
-            Serial.println("SIM800 ready");
-            sendAT("ATE0", modemResponse, sizeof(modemResponse));
-            modemState = READY;
-            break;
-          case AT_ERROR:
-            Serial.println("SIM800 returned ERROR");
-            modemState = ERROR;
-            break;
-          case AT_TIMEOUT:
-            Serial.println("SIM800 timeout");
-            modemState = ERROR;
-            break;
-        }
-      }
-      break;
-    }
-    case READY: {
-      if (!modemInitialized) {
-        ATResult result;
-        result = sendAT("AT+CPIN?", modemResponse, sizeof(modemResponse));
-        if (result != AT_OK) {
-          modemState = ERROR;
-          break;
-        }
-        result = sendAT("AT+CREG?", modemResponse, sizeof(modemResponse));
-        if (result != AT_OK) {
-          modemState = ERROR;
-          break;
-        }
-        result = sendAT("AT+CSQ", modemResponse, sizeof(modemResponse));
-        if (result != AT_OK) {
-          modemState = ERROR;
-          break;
-        }
-        modemInitialized = true;
-        Serial.println();
-        Serial.println("==================================");
-        Serial.println("Enter phone number");
-        Serial.println("Example: +21612345678");
-        Serial.println("Press Enter to call.");
-        Serial.println("==================================");
-      }
-      if (Serial.available()) {
-        char input[PHONE_BUF_SIZE];
-        size_t len = Serial.readBytesUntil('\n', input, PHONE_BUF_SIZE - 1);
-        input[len] = '\0';
+    Serial.println();
+    Serial.println("SIM800 starting...");
 
-        while (len > 0 && (input[len - 1] == '\r' || input[len - 1] == '\n')) {
-          input[--len] = '\0';
+    bootStart = millis();
+
+    modemState = BOOTING;}
+void loop() {
+  processSerial();          // only UART reader
+    // Handle AT command timeout
+  checkATTimeout();  
+    switch (modemState) {
+case BOOTING:
+{
+    static bool commandSent = false;
+
+
+    if (!commandSent &&
+        !atCommand.active &&
+        millis() - bootStart >= MODEM_BOOT_TIME)
+    {
+        if (bootStep == 0)
+        {
+            sendAT("AT");
         }
-        if (strcasecmp(input, "H") == 0) {
-          if (callActive) {
-            sim800.println("ATH");
-            callActive = false;
-            Serial.println("Call ended.");
-          }
+        else
+        {
+            sendAT("ATE0");
         }
-        else if (validNumber(input)) {
-          Serial.print("Calling ");
-          Serial.println(input);
-          callNumber(input);
-          modemState = DIALING;
-        }
-        else {
-          Serial.println("Invalid phone number.");
-        }
-      }
-      break;
+
+        commandSent = true;
     }
-    case DIALING: {
-      // TODO: parse modem response
-      // CONNECT -> IN_CALL
-      // NO CARRIER -> READY
-      if (strstr(response, "CONNECT")) {
-        modemState = IN_CALL;
-        callActive = true;
-      }
-      break;
-    }
-    case IN_CALL: {
-      if (Serial.available()) {
-        char command = Serial.read();
-        if (command == 'H' || command == 'h') {
-          sim800.println("ATH");
-          callActive = false;
-          modemState = READY;
-          Serial.println("Call ended.");
+
+
+    if (commandSent && atFinished())
+    {
+        commandSent = false;
+
+
+        if (atResult() != AT_OK)
+        {
+            Serial.println("SIM800 failed");
+            modemState = ERROR;
+            break;
         }
-      }
-      break;
+
+
+        if (bootStep == 0)
+        {
+            bootStep = 1;
+        }
+        else
+        {
+            Serial.println("SIM800 ready");
+            modemState = READY;
+        }
+
+
+        atCommand.finished = false;
     }
-    case ERROR: {
-      Serial.println("Modem error.");
-      while (true) {
-      }
-      break;
+
+
+    break;
+}
+
+
+
+        case READY:
+        {
+            static bool initialized = false;
+            static uint8_t initStep = 0;
+
+
+            // modem initialization sequence
+            if (!initialized)
+            {
+                if (!atCommand.active && !atCommand.finished)
+                {
+                    switch(initStep)
+                    {
+                        case 0:
+                            sendAT("AT+CPIN?", 3000);
+                            break;
+
+                        case 1:
+                            sendAT("AT+CREG?", 3000);
+                            break;
+
+                        case 2:
+                            sendAT("AT+CSQ", 2000);
+                            break;
+
+                        case 3:
+                            initialized = true;
+
+                            Serial.println();
+                                    Serial.println("Modem initialized");
+                            Serial.println("==============================");
+                            Serial.println("Enter phone number");
+                            Serial.println("Example: +21612345678");
+                            Serial.println("H = hangup");
+                            Serial.println("==============================");
+
+                            break;
+                    }
+                }
+
+
+                if (atFinished())
+                {
+                    if (atResult() != AT_OK)
+                    {
+                        modemState = ERROR;
+                                break;
+                    }
+
+                    atCommand.finished = false;
+                        initStep++;
+                }
+
+                break;
+            }
+
+
+
+            // User input
+            if (Serial.available())
+            {
+                char input[PHONE_BUF_SIZE];
+
+                size_t len =
+                    Serial.readBytesUntil('\n',
+                                          input,
+                                          PHONE_BUF_SIZE - 1);
+
+                input[len] = '\0';
+
+
+                while (len > 0 &&
+                      (input[len-1]=='\r' ||
+                       input[len-1]=='\n'))
+                {
+                    input[--len]='\0';
+                }
+
+
+                if (strcasecmp(input,"H")==0)
+                {
+                    sendAT("ATH");
+                    Serial.println("Hangup requested");
+                }
+
+
+                else if (validNumber(input))
+                {
+                    char cmd[48];
+
+                    snprintf(cmd,
+                             sizeof(cmd),
+                             "ATD%s;",
+                             input);
+
+
+                    Serial.print("Calling ");
+                    Serial.println(input);
+
+
+                    sendAT(cmd,30000);
+
+                    modemState = DIALING;
+                }
+
+
+                else
+                {
+                    Serial.println("Invalid phone number");
+                }
+            }
+
+
+            break;
+        }
+
+
+
+        case DIALING:
+        {
+            /*
+              No blocking here.
+
+              The parser changes state:
+
+              CONNECT
+                  |
+                  v
+              IN_CALL
+
+              NO CARRIER
+              BUSY
+                  |
+                  v
+              READY
+            */
+
+
+            break;
+        }
+
+
+
+        case IN_CALL:
+        {
+            if (Serial.available())
+            {
+                char c = Serial.read();
+
+                if (c=='h' || c=='H')
+                {
+                    sendAT("ATH");
+                                            modemState = READY;
+
+                    Serial.println("Ending call");
+                }
+            }
+
+            break;
+        }
+
+
+
+        case ERROR:
+        {
+            Serial.println("Modem error");
+
+            while(true)
+            {
+                // stop
+            }
+
+            break;
+        }
     }
-  }
-  //printSIM800Response();
-  readSIM800Response(modemResponse, sizeof(modemResponse));
 }
