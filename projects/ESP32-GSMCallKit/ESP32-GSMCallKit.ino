@@ -1,27 +1,42 @@
 // TODO:
-// 1. Remove callActive tracking.
-//    Use ModemState:
-//    READY
-//    DIALING
-//    IN_CALL
-//
-// 2. Create proper modem response parser.
-//    Handle unsolicited responses:
-//    CONNECT
-//    NO CARRIER
-//    BUSY
-//    RING
-//
-// 3. Separate command responses from unsolicited modem events.
-//    Prevent sendAT() and response parser from competing for UART.
-//
-// 4. Replace blocking sendAT() with asynchronous AT command handling.
-//
 // 5. Move serial input cleanup into separate function.
+//    Create cleanInput() helper.
+//    Remove duplicated '\r'/'\n' cleanup code.
+//    ⏳ NEXT
 //
 // 6. Add support for storing multiple phone numbers.
+//    Create phonebook structure.
+//    Add save/delete/list phone number commands.
+//    Store numbers in EEPROM/Preferences.
+//    ⏳ TODO
 //
 // 7. Add SMS functionality.
+//    Support:
+//    AT+CMGF
+//    AT+CMGS
+//    SMS receive notifications.
+//    ⏳ TODO
+//
+// 8. Improve call handling.
+//    Add call timeout.
+//    Handle outgoing call failure states.
+//    Handle incoming call answer/reject:
+//        ATA
+//        ATH
+//    ⏳ TODO
+//
+// 9. Improve AT command engine.
+//    Add command queue for multiple pending commands.
+//    Store command name/type for debugging.
+//    Add command-specific timeout values.
+//    ⏳ FUTURE
+//
+// 10. Add modem recovery.
+//     Handle SIM800 reset/restart.
+//     Recover from ERROR state.
+//     Add watchdog protection.
+//     ⏳ FUTURE
+
 
 #include <HardwareSerial.h>
 #include <ctype.h>
