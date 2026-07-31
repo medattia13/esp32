@@ -5,6 +5,14 @@
 #include <HardwareSerial.h>
 
 #include "ATCommand.h"
+enum ModemState
+{
+    BOOTING,
+    READY,
+    DIALING,
+    IN_CALL,
+    MODEM_ERROR
+};
 
 class SIM800
 {
@@ -36,6 +44,8 @@ private:
     unsigned long bootStart;
     uint8_t bootStep;
 
+bool incomingCall = false;
+
 
     void processSerial();
     void processLine(const char *line);
@@ -46,4 +56,8 @@ private:
     void checkATTimeout();
 
     bool validNumber(const char *number);
+    bool atFinished();
+ATResult atResult();
+
 };
+#endif
