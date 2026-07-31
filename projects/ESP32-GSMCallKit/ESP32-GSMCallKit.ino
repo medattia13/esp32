@@ -1,26 +1,3 @@
-// TODO: Arduino IDE GSM project refactor
-// Phase 6: Test after refactor
-//
-// 14. Compile in Arduino IDE.
-//
-// 15. Test modem boot:
-//     - AT
-//     - ATE0
-//
-// 16. Test initialization:
-//     - CPIN
-//     - CREG
-//     - CSQ
-//
-// 17. Test outgoing call:
-//     - Dial number
-//     - CONNECT
-//     - Hangup
-//     - NO CARRIER
-//
-// 18. Fix any regression before adding features.
-//
-//
 // Phase 7: Add new modules
 //
 // 19. Add PhoneBook class.
