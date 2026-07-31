@@ -19,6 +19,47 @@ enum Mode {
 };
 
 Mode mode = WAIT_MODE;
+String ucs2ToUtf8(String hex)
+{
+    String out = "";
+
+    for (int i = 0; i + 3 < hex.length(); i += 4)
+    {
+        uint16_t c = (strtol(hex.substring(i, i + 4).c_str(), NULL, 16));
+
+        if (c < 0x80)
+        {
+            out += char(c);
+        }
+        else if (c < 0x800)
+        {
+            out += char(0xC0 | (c >> 6));
+            out += char(0x80 | (c & 0x3F));
+        }
+        else
+        {
+            out += char(0xE0 | (c >> 12));
+            out += char(0x80 | ((c >> 6) & 0x3F));
+            out += char(0x80 | (c & 0x3F));
+        }
+    }
+
+    return out;
+}
+
+bool isUCS2(String s)
+{
+    if (s.length() % 4 != 0)
+        return false;
+
+    for (int i = 0; i < s.length(); i++)
+    {
+        if (!isxdigit(s[i]))
+            return false;
+    }
+
+    return true;
+}
 
 void manualAT(String cmd) {
   sim800.println(cmd);
@@ -44,15 +85,45 @@ void setupSMSReceive() {
   Serial.println("SMS receiving enabled.");
 }
 
-void readSMS() {
-  Serial.println("Reading SMS...");
-  sim800.println("AT+CMGL=\"ALL\"");
-  unsigned long start = millis();
-  while (millis() - start < 5000) {
-    while (sim800.available()) {
-      Serial.write(sim800.read());
+
+void readSMS()
+{
+    Serial.println("Reading SMS...");
+
+    sim800.println("AT+CMGL=\"ALL\"");
+
+    String line = "";
+    unsigned long start = millis();
+
+    while (millis() - start < 5000)
+    {
+        while (sim800.available())
+        {
+            char c = sim800.read();
+
+            if (c == '\r')
+                continue;
+
+            if (c == '\n')
+            {
+                line.trim();
+
+                if (line.length())
+                {
+                    if (isUCS2(line))
+                        Serial.println(ucs2ToUtf8(line));
+                    else
+                        Serial.println(line);
+                }
+
+                line = "";
+            }
+            else
+            {
+                line += c;
+            }
+        }
     }
-  }
 }
 
 void sendSMS(String number, String text) {
