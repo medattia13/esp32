@@ -15,6 +15,7 @@ SIM800::SIM800()
     , linePos(0)
     , bootStep(0)
     , bootStart(0)
+    , debugMode(false)
 {
     lineBuffer[0] = '\0';
 }
@@ -34,7 +35,10 @@ void SIM800::update()
     processSerial();
 
     checkATTimeout();
-
+    if (debugMode) {
+        handleDebugInput();
+        return;
+    }
     switch (state) {
     case BOOTING: {
         static bool commandSent = false;
@@ -96,7 +100,7 @@ void SIM800::update()
                 case 3:
                     sendAT("AT+CLIP=1", 2000);
                     break;
-                case 43:
+                case 4:
                     initialized = true;
 
                     Serial.println();
@@ -136,28 +140,12 @@ void SIM800::update()
             while (len > 0 && (input[len - 1] == '\r' || input[len - 1] == '\n')) {
                 input[--len] = '\0';
             }
-            static bool debugMode = false;
-            if (debugMode) {
-                if (strcasecmp(input, "EXIT") == 0) {
-                    debugMode = false;
-                    Serial.println("Leaving debug mode.");
-                } else {
-                    sendAT(input, 10000);
-                }
-
-                break;
-            }
 
             else if (strcasecmp(input, "D") == 0) {
-                debugMode = true;
+                handleDebugInput();
+            }
 
-                Serial.println();
-                Serial.println("===== DEBUG MODE =====");
-                Serial.println("Type any AT command.");
-                Serial.println("Example: AT+CSQ");
-                Serial.println("Type EXIT to leave.");
-                Serial.println("======================");
-            } else if (strcasecmp(input, "H") == 0) {
+            else if (strcasecmp(input, "H") == 0) {
                 hangup();
             }
 
@@ -252,6 +240,25 @@ bool SIM800::hangup()
     return false;
 }
 
+bool SIM800::sendSMS(const char *number,
+               const char *message)
+{
+    char cmd[64];
+    sim800.sendAT("AT+CMGF=1");
+
+    snprintf(cmd,
+             sizeof(cmd),
+             "AT+CMGS=\"%s\"",
+             number);
+
+    sim800.sendAT(cmd);
+
+    // wait for '>' prompt
+    // send message
+    // send Ctrl+Z
+
+    return true;
+}
 void SIM800::processLine(const char *line)
 { // TODO: Replace strcpy() in processLine() response handling with memcpy()
     //       to avoid copying the null terminator twice and make length handling cleaner.
@@ -434,4 +441,46 @@ bool SIM800::atFinished()
 ATResult SIM800::atResult()
 {
     return atCommand.result;
+}
+void SIM800::handleDebugInput()
+{
+    if (!Serial.available())
+        return;
+
+    Serial.println();
+    Serial.println("===== DEBUG MODE =====");
+    Serial.println("Type any AT command.");
+    Serial.println("Example: AT+CSQ");
+    Serial.println("Type EXIT to leave.");
+    Serial.println("======================");
+
+    char input[64];
+
+    size_t len =
+        Serial.readBytesUntil('\n',
+                              input,
+                              sizeof(input)-1);
+
+    input[len] = '\0';
+
+
+    while (len > 0 &&
+           (input[len-1]=='\r' ||
+            input[len-1]=='\n'))
+    {
+        input[--len]='\0';
+    }
+
+
+    if (strcasecmp(input,"EXIT")==0)
+    {
+        debugMode = false;
+
+        Serial.println("Leaving debug mode.");
+        Serial.println("Returning to normal mode.");
+
+        return;
+    }
+
+    sendAT(input,10000);
 }

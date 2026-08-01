@@ -18,6 +18,11 @@ public:
     bool dial(const char *number);
     bool hangup();
 
+    bool sendSMS(const char *number, const char *message);
+    bool readSMS();
+    bool deleteSMS(uint8_t index);
+
+    bool sendUSSD(const char *code);
     ModemState getState();
 
 private:
@@ -32,11 +37,15 @@ private:
 
     unsigned long bootStart;
     uint8_t bootStep;
-
+    bool debugMode = false;
     bool incomingCall = false;
     char callerNumber[32];
     void processSerial();
     void processLine(const char *line);
+    void processCall(const char *line);
+
+    void processSMS(const char *line);
+    void processUSSD(const char *line);
 
     bool sendAT(const char *cmd, uint32_t timeout = 1000);
 
@@ -45,5 +54,7 @@ private:
     bool validNumber(const char *number);
     bool atFinished();
     ATResult atResult();
+    void handleDebugInput();
+
 };
 #endif
