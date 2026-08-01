@@ -4,12 +4,21 @@
 #include <Arduino.h>
 #include <HardwareSerial.h>
 
-#include "ATCommand.h"
-enum ModemState { BOOTING, READY, DIALING, IN_CALL, MODEM_ERROR };
+#include "src/ATCommand.h"
+enum ModemState
+{
+    BOOTING,
+    READY,
+    DIALING,
+    IN_CALL,
+    MODEM_ERROR
+};
 
 class SIM800
 {
+
 public:
+
     SIM800();
 
     void begin();
@@ -20,10 +29,14 @@ public:
 
     ModemState getState();
 
+    bool sendAT(const char *cmd,
+                uint32_t timeout = 1000);
+
 private:
+
     HardwareSerial modem;
 
-    ATCommand atCommand;
+    ATCommand atCommand;   // <-- add this here
 
     ModemState state;
 
@@ -33,17 +46,18 @@ private:
     unsigned long bootStart;
     uint8_t bootStep;
 
-    bool incomingCall = false;
-    char callerNumber[32];
+bool incomingCall = false;
+
+
     void processSerial();
     void processLine(const char *line);
 
-    bool sendAT(const char *cmd, uint32_t timeout = 1000);
 
     void checkATTimeout();
 
     bool validNumber(const char *number);
     bool atFinished();
-    ATResult atResult();
+ATResult atResult();
+
 };
 #endif

@@ -1,6 +1,17 @@
 // Phase 7: Add new modules
+//// 19. Add SMS class.
+//// 7. Add SMS functionality.
+//    Support:
+//    AT+CMGF
+//    AT+CMGS
+//    SMS receive notifications.
+//     Features:
+//        - text mode
+//        - send SMS
+//        - receive SMS
+//        - SMS notifications
 //
-// 19. Add PhoneBook class.
+//  Add PhoneBook class.
 //// 6. Add support for storing multiple phone numbers.
 //    Create phonebook structure.
 //    Add save/delete/list phone number commands.
@@ -16,24 +27,7 @@
 //        - list numbers
 //        - ESP32 Preferences storage
 //
-// 20. Add SMS class.
-//// 7. Add SMS functionality.
-//    Support:
-//    AT+CMGF
-//    AT+CMGS
-//    SMS receive notifications.
-//    ⏳ TODO
-//
-//     Files:
-//        SMS.h
-//        SMS.cpp
-//
-//     Features:
-//        - text mode
-//        - send SMS
-//        - receive SMS
-//        - SMS notifications
-//
+
 //
 // Phase 8: Future improvements
 //
@@ -65,7 +59,7 @@
 //
 // 24. Add watchdog protection.
 
-#include "SIM800.h"
+#include "src/SIM800.h"
 SIM800 modem;
 
 void setup() 

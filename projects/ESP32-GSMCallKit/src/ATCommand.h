@@ -3,13 +3,7 @@
 
 #include <Arduino.h>
 
-enum ATResult
-{
-    AT_TIMEOUT,
-    AT_OK,
-    AT_ERROR
-};
-
+enum ATResult { AT_TIMEOUT, AT_OK, AT_ERROR };
 
 struct ATCommand
 {
