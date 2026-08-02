@@ -5,7 +5,27 @@
 #include <HardwareSerial.h>
 
 #include "ATCommand.h"
-enum ModemState { BOOTING, READY, DIALING, IN_CALL, MODEM_ERROR };
+enum ModemState { BOOTING, READY, DIALING, IN_CALL, MODEM_ERROR,  WAIT_MODE,
+                  USSD_INPUT,
+                  DEBUG_MODE,
+                  CALL_NUMBER,
+                  SMS_NUMBER,
+                  SMS_MESSAGE,USSD_PENDING
+ };
+enum SMSState
+{
+    SMS_IDLE,
+    SMS_WAIT_TEXTMODE,
+    SMS_WAIT_CHARSET,
+    SMS_WAIT_PROMPT,
+    SMS_WAIT_RESULT,
+    SMS_READING
+};
+enum USSDState
+{
+    USSD_IDLE,
+    USSD_WAIT_RESULT
+};
 
 class SIM800
 {
@@ -22,8 +42,10 @@ public:
     bool readSMS();
     bool deleteSMS(uint8_t index);
 
-    bool sendUSSD(const char *code);
-    ModemState getState();
+    bool sendUSSD(String code);
+    ModemState getModemState();
+    SMSState getSMSState();
+
 
 private:
     HardwareSerial modem;
@@ -34,7 +56,12 @@ private:
 
     char lineBuffer[128];
     size_t linePos;
+    SMSState smsState = SMS_IDLE;
+    String phoneNumber;
 
+    char smsNumber[32];
+    char smsText[161];
+    String message;
     unsigned long bootStart;
     uint8_t bootStep;
     bool debugMode = false;
@@ -55,6 +82,7 @@ private:
     bool atFinished();
     ATResult atResult();
     void handleDebugInput();
+    void printMenu();
 
 };
 #endif
