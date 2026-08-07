@@ -1,18 +1,7 @@
-// Phase 7: Add new modules
-//// 19. Add SMS class.
-//// 7. Add SMS functionality.
-//    Support:
-//    AT+CMGF
-//    AT+CMGS
-//    SMS receive notifications.
-//     Features:
-//        - text mode
-//        - send SMS
-//        - receive SMS
-//        - SMS notifications
+
 //
 //  Add PhoneBook class.
-//// 6. Add support for storing multiple phone numbers.
+// // 6. Add support for storing multiple phone numbers.
 //    Create phonebook structure.
 //    Add save/delete/list phone number commands.
 //    Store numbers in EEPROM/Preferences.
