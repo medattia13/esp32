@@ -1,3 +1,5 @@
+//TODO//
+// add arabic character handling using ucs2ToUtf8
 #include "SIM800.h"
 #include <ctype.h>
 #include <string.h>
@@ -282,6 +284,12 @@ void SIM800::update()
                 message = "";
             } else {
                 Serial.println("Unable to start SMS.");
+
+                phoneNumber = "";
+                message = "";
+
+                state = WAIT_MODE;
+                printMenu();
             }
         }
         break;
@@ -341,27 +349,39 @@ bool SIM800::hangup()
 {
     return sendAT("ATH",5000);
 }
-bool SIM800::sendSMS(const char *number,const char *message)
+
+bool SIM800::sendSMS(const char *number, const char *message)
 {
-
-    if(smsState!=SMS_IDLE)
+    if (smsState != SMS_IDLE) {
+        Serial.print("SMS busy, state = ");
+        Serial.println((int)smsState);
         return false;
+    }
 
-    if(!validNumber(number))
+    if (!validNumber(number)) {
+        Serial.println("Invalid phone number");
         return false;
+    }
 
-    strncpy(smsNumber,number,sizeof(smsNumber)-1);
-    smsNumber[sizeof(smsNumber)-1]='\0';
+    strncpy(smsNumber, number, sizeof(smsNumber) - 1);
+    smsNumber[sizeof(smsNumber) - 1] = '\0';
 
-    strncpy(smsText,message,sizeof(smsText)-1);
-    smsText[sizeof(smsText)-1]='\0';
-
-    smsState=SMS_WAIT_TEXTMODE;
+    strncpy(smsText, message, sizeof(smsText) - 1);
+    smsText[sizeof(smsText) - 1] = '\0';
 
     Serial.println("Starting SMS...");
 
-    return sendAT("AT+CMGF=1",3000);
+    if (!sendAT("AT+CMGF=1", 3000)) {
+        Serial.println("Could not start AT+CMGF=1");
+        smsState = SMS_IDLE;   // IMPORTANT
+        return false;
+    }
+
+    smsState = SMS_WAIT_TEXTMODE;
+
+    return true;
 }
+
 bool SIM800::sendUSSD(String code)
 {
     char cmd[40];
@@ -370,6 +390,9 @@ bool SIM800::sendUSSD(String code)
              sizeof(cmd),
              "AT+CUSD=1,\"%s\"",
              code.c_str());
+
+    // Cancel any active USSD session
+    //sim800.println("AT+CUSD=2");
 
     if(sendAT(cmd,10000))
     {
@@ -509,7 +532,18 @@ void SIM800::processLine(const char *line)
             printMenu();
             return;
         case SMS_READING:
+                    smsState = SMS_WAIT_LIST;
             sendAT("AT+CMGL=\"ALL\"",5000);
+            return;
+        case SMS_WAIT_LIST:
+            // This OK belongs to AT+CMGL="ALL".
+            // Do NOT send CMGL again.
+            smsState = SMS_IDLE;
+
+            Serial.println("Finished reading SMS.");
+
+            state = WAIT_MODE;
+            printMenu();
             return;
 
         default:
@@ -602,10 +636,10 @@ bool SIM800::readSMS()
 {
     if(atCommand.active)
         return false;
-        smsState = SMS_READING;
+    smsState = SMS_READING;
     return sendAT("AT+CMGF=1",3000);
-}
 
+}
 bool SIM800::sendAT(const char *cmd, uint32_t timeout)
 {
     if (atCommand.active) {
@@ -703,8 +737,49 @@ ModemState SIM800::getModemState()
 {
     return state;
 }
-
 SMSState SIM800::getSMSState()
 {
     return smsState;
+}
+
+String ucs2ToUtf8(String hex)
+{
+    String out = "";
+
+    for (int i = 0; i + 3 < hex.length(); i += 4)
+    {
+        uint16_t c = (strtol(hex.substring(i, i + 4).c_str(), NULL, 16));
+
+        if (c < 0x80)
+        {
+            out += char(c);
+        }
+        else if (c < 0x800)
+        {
+            out += char(0xC0 | (c >> 6));
+            out += char(0x80 | (c & 0x3F));
+        }
+        else
+        {
+            out += char(0xE0 | (c >> 12));
+            out += char(0x80 | ((c >> 6) & 0x3F));
+            out += char(0x80 | (c & 0x3F));
+        }
+    }
+
+    return out;
+}
+
+bool isUCS2(String s)
+{
+    if (s.length() % 4 != 0)
+        return false;
+
+    for (int i = 0; i < s.length(); i++)
+    {
+        if (!isxdigit(s[i]))
+            return false;
+    }
+
+    return true;
 }

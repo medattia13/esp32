@@ -19,7 +19,8 @@ enum SMSState
     SMS_WAIT_CHARSET,
     SMS_WAIT_PROMPT,
     SMS_WAIT_RESULT,
-    SMS_READING
+    SMS_READING,
+    SMS_WAIT_LIST
 };
 enum USSDState
 {
