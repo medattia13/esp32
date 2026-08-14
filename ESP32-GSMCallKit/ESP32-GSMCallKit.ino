@@ -1,24 +1,4 @@
-
-//Vugs to fix
-//
-//  Add PhoneBook class.
-// // 6. Add support for storing multiple phone numbers.
-//    Create phonebook structure.
-//    Add save/delete/list phone number commands.
-//    Store numbers in EEPROM/Preferences.
-//    ⏳ TODO
-//     Files:
-//        PhoneBook.h
-//        PhoneBook.cpp
-//
-//     Features:
-//        - store numbers
-//        - delete numbers
-//        - list numbers
-//        - ESP32 Preferences storage
-//
-
-//
+// TODO
 // Phase 8: Future improvements
 //
 // 21. Add AT command queue.
