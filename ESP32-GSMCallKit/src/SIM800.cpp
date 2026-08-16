@@ -1,8 +1,3 @@
-//TODO//
-// add arabic character handling using ucs2ToUtf8
-//// TODO: Move phonebook functionality into a separate PhoneBook class.
-//       Keep SIM800 focused on modem communication.
-
 #include "SIM800.h"
 #include <ctype.h>
 #include <string.h>
@@ -16,6 +11,7 @@ constexpr size_t PHONE_BUF_SIZE = 32;
 
 SIM800::SIM800()
     : modem(2)
+    , phonebook(*this)
     , state(BOOTING)
     , smsState(SMS_IDLE)
     , linePos(0)
@@ -29,12 +25,13 @@ SIM800::SIM800()
 void SIM800::begin()
 {
     modem.begin(MODEM_BAUD, SERIAL_8N1, SIM800_RX, SIM800_TX);
-
+    phonebook.begin();
     Serial.println();
     Serial.println("SIM800 starting...");
 
     bootStart = millis();
 }
+
 void SIM800::update()
 {
     processSerial();
@@ -162,13 +159,11 @@ void SIM800::update()
                 Serial.println("Enter USSD code:");
                 state = USSD_INPUT;
             }
-            else if (strcasecmp(input, "CONTACTS") == 0)
-            {
-                
-                    state = PHONEBOOK_MENU;
-    phonebookMenu = PB_MENU_MAIN;
-    printPhonebookMenu();
-            }
+else if (strcasecmp(input, "CONTACTS") == 0)
+{
+    state = PHONEBOOK_MENU;
+    phonebook.open();
+}
 
             else {
                 Serial.println("Invalid input");
@@ -331,7 +326,7 @@ void SIM800::update()
     }
 case PHONEBOOK_MENU:
 {
-    handlePhonebookInput();
+    phonebook.update();
     break;
 }
 
@@ -515,44 +510,16 @@ void SIM800::processLine(const char *line)
     }
     // AT command final responses
     if (strcmp(line, "OK") == 0)
-    {
-        atCommand.active = false;
-        atCommand.finished = true;
-        atCommand.result = AT_OK;
-// ========================================================
-// PHONEBOOK STATE MACHINE
-// ========================================================
-
-if (phonebookState == PB_WAIT_STORAGE)
 {
-    atCommand.finished = false;
+    atCommand.active = false;
+    atCommand.finished = true;
+    atCommand.result = AT_OK;
 
-    if (phonebookMenu == PB_MENU_VIEW ||
-        phonebookMenu == PB_MENU_SEARCH)
+    if (phonebook.isBusy())
     {
-        phonebookState = PB_WAIT_LIST;
-
-        sendAT("AT+CPBR=1,20", 5000);
+        phonebook.onOk();
+        return;
     }
-    else
-    {
-        phonebookState = PB_WAIT_READ;
-
-        char cmd[32];
-
-        snprintf(
-            cmd,
-            sizeof(cmd),
-            "AT+CPBR=%u",
-            phonebookIndex
-        );
-
-        sendAT(cmd, 5000);
-    }
-
-    return;
-}
-
 
 
         switch (smsState)
@@ -601,96 +568,7 @@ if (phonebookState == PB_WAIT_STORAGE)
 
         return;
     }
-if (phonebookState == PB_WAIT_WRITE)
-{
-    phonebookState = PB_IDLE;
 
-    Serial.println();
-    Serial.println("Contact saved successfully.");
-
-    phonebookMenu = PB_MENU_MAIN;
-    state = PHONEBOOK_MENU;
-
-    printPhonebookMenu();
-
-    return;
-}
-
-if (phonebookState == PB_WAIT_DELETE)
-{
-    phonebookState = PB_IDLE;
-
-    Serial.println();
-    Serial.println("Contact deleted successfully.");
-
-    phonebookMenu = PB_MENU_MAIN;
-    state = PHONEBOOK_MENU;
-
-    printPhonebookMenu();
-
-    return;
-}
-
-if (phonebookState == PB_WAIT_LIST)
-{
-    phonebookState = PB_IDLE;
-
-    Serial.println();
-    Serial.println("Finished reading phonebook.");
-
-    if (phonebookEntryCount == 0)
-    {
-        Serial.println("No contacts found.");
-    }
-
-    phonebookMenu = PB_MENU_MAIN;
-
-    state = PHONEBOOK_MENU;
-
-    printPhonebookMenu();
-
-    return;
-}
-
-if (phonebookState == PB_WAIT_READ)
-{
-    phonebookState = PB_IDLE;
-
-    // A +CPBR response should already have populated
-    // lastPhonebookEntry.
-
-    if (lastPhonebookEntry.index != 0)
-    {
-        printPhonebookEntry(lastPhonebookEntry);
-
-        // Call contact?
-        if (phonebookMenu == PB_MENU_CALL)
-        {
-            Serial.print("Calling ");
-            Serial.println(lastPhonebookEntry.number);
-
-            phoneNumber = lastPhonebookEntry.number;
-
-            phonebookMenu = PB_MENU_MAIN;
-
-            dial(phoneNumber.c_str());
-
-            return;
-        }
-    }
-    else
-    {
-        Serial.println("Contact not found.");
-    }
-
-    phonebookMenu = PB_MENU_MAIN;
-
-    state = PHONEBOOK_MENU;
-
-    printPhonebookMenu();
-
-    return;
-}
 
     if(strncmp(line, "+CUSD:", 6) == 0)
     {
@@ -702,20 +580,13 @@ if (phonebookState == PB_WAIT_READ)
     }
 
 
-    if (strcmp(line, "ERROR") == 0)
+if (strcmp(line, "ERROR") == 0)
 {
     smsState = SMS_IDLE;
 
-    if (phonebookState != PB_IDLE)
+    if (phonebook.isBusy())
     {
-        Serial.println("Phonebook operation failed.");
-
-        phonebookState = PB_IDLE;
-        phonebookMenu = PB_MENU_MAIN;
-
-        state = PHONEBOOK_MENU;
-
-        printPhonebookMenu();
+        phonebook.onError();
 
         atCommand.active = false;
         atCommand.finished = true;
@@ -735,6 +606,7 @@ if (phonebookState == PB_WAIT_READ)
 
     return;
 }
+
 
     if (strcmp(line, ">") == 0)
     {
@@ -757,7 +629,7 @@ if (phonebookState == PB_WAIT_READ)
 
     if (strncmp(line, "+CPBR:", 6) == 0)
     {
-        processPhonebook(line);
+        phonebook.processLine(line);
         return;
     }
 
@@ -906,668 +778,10 @@ SMSState SIM800::getSMSState()
     return smsState;
 }
 
-String ucs2ToUtf8(String hex)
+
+void SIM800::returnToMainMenu()
 {
-    String out = "";
-
-    for (int i = 0; i + 3 < hex.length(); i += 4)
-    {
-        uint16_t c = (strtol(hex.substring(i, i + 4).c_str(), NULL, 16));
-
-        if (c < 0x80)
-        {
-            out += char(c);
-        }
-        else if (c < 0x800)
-        {
-            out += char(0xC0 | (c >> 6));
-            out += char(0x80 | (c & 0x3F));
-        }
-        else
-        {
-            out += char(0xE0 | (c >> 12));
-            out += char(0x80 | ((c >> 6) & 0x3F));
-            out += char(0x80 | (c & 0x3F));
-        }
-    }
-
-    return out;
-}
-
-bool isUCS2(String s)
-{
-    if (s.length() % 4 != 0)
-        return false;
-
-    for (int i = 0; i < s.length(); i++)
-    {
-        if (!isxdigit(s[i]))
-            return false;
-    }
-
-    return true;
-}
-
-bool SIM800::selectPhonebook(const char *storage)
-{
-    if (atCommand.active)
-        return false;
-
-    char cmd[32];
-
-    snprintf(
-        cmd,
-        sizeof(cmd),
-        "AT+CPBS=\"%s\"",
-        storage
-    );
-
-    return sendAT(cmd, 3000);
-}
-
-
-bool SIM800::writePhonebook(
-    uint8_t index,
-    const char *number,
-    const char *name)
-{
-    if (!validNumber(number))
-        return false;
-
-    if (atCommand.active)
-        return false;
-
-    char cmd[128];
-
-    snprintf(
-        cmd,
-        sizeof(cmd),
-        "AT+CPBW=%u,\"%s\",145,\"%s\"",
-        index,
-        number,
-        name
-    );
-
-    phonebookState = PB_WAIT_WRITE;
-
-    return sendAT(cmd, 5000);
-}
-
-
-bool SIM800::deletePhonebook(uint8_t index)
-{
-    if (atCommand.active)
-        return false;
-
-    char cmd[32];
-
-    snprintf(
-        cmd,
-        sizeof(cmd),
-        "AT+CPBW=%u",
-        index
-    );
-
-    phonebookState = PB_WAIT_DELETE;
-
-    return sendAT(cmd, 5000);
-}
-
-bool SIM800::readPhonebook(
-    uint8_t index,
-    PhonebookEntry &entry)
-{
-    if (atCommand.active)
-        return false;
-
-    memset(&entry, 0, sizeof(entry));
-
-    lastPhonebookEntry = entry;
-
-    phonebookIndex = index;
-
-    phonebookState = PB_WAIT_STORAGE;
-
-    return selectPhonebook("SM");
-}
-
-
-
-void SIM800::processPhonebook(const char *line)
-{
-    PhonebookEntry entry;
-    memset(&entry, 0, sizeof(entry));
-
-    // Expected:
-    // +CPBR: 1,"+21612345678",145,"Alice"
-
-    if (strncmp(line, "+CPBR:", 6) != 0)
-        return;
-
-    const char *p = line + 6;
-
-    // Skip spaces
-    while (*p == ' ')
-        p++;
-
-    // --------------------------------------------------------
-    // Index
-    // --------------------------------------------------------
-
-    char *endPtr;
-
-    long index = strtol(p, &endPtr, 10);
-
-    if (endPtr == p)
-    {
-        Serial.println("Invalid phonebook index.");
-        return;
-    }
-
-    entry.index = (uint16_t)index;
-
-    p = endPtr;
-
-    // Skip comma/spaces
-    while (*p == ' ' || *p == ',')
-        p++;
-
-    // --------------------------------------------------------
-    // Phone number
-    // --------------------------------------------------------
-
-    if (*p != '"')
-    {
-        Serial.println("Invalid phonebook number.");
-        return;
-    }
-
-    p++;
-
-    const char *numberStart = p;
-    const char *numberEnd = strchr(numberStart, '"');
-
-    if (!numberEnd)
-    {
-        Serial.println("Invalid phonebook number.");
-        return;
-    }
-
-    size_t numberLen = numberEnd - numberStart;
-
-    if (numberLen >= sizeof(entry.number))
-        numberLen = sizeof(entry.number) - 1;
-
-    memcpy(
-        entry.number,
-        numberStart,
-        numberLen
-    );
-
-    entry.number[numberLen] = '\0';
-
-    p = numberEnd + 1;
-
-    // --------------------------------------------------------
-    // Number type
-    // --------------------------------------------------------
-
-    while (*p == ' ' || *p == ',')
-        p++;
-
-    long type = strtol(p, &endPtr, 10);
-
-    if (endPtr == p)
-    {
-        Serial.println("Invalid phonebook type.");
-        return;
-    }
-
-    entry.type = (int)type;
-
-    p = endPtr;
-
-    // Skip comma/spaces
-    while (*p == ' ' || *p == ',')
-        p++;
-
-    // --------------------------------------------------------
-    // Contact name
-    // --------------------------------------------------------
-
-    if (*p != '"')
-    {
-        Serial.println("Invalid phonebook name.");
-        return;
-    }
-
-    p++;
-
-    const char *nameStart = p;
-    const char *nameEnd = strchr(nameStart, '"');
-
-    if (!nameEnd)
-    {
-        Serial.println("Invalid phonebook name.");
-        return;
-    }
-
-    size_t nameLen = nameEnd - nameStart;
-
-    if (nameLen >= sizeof(entry.name))
-        nameLen = sizeof(entry.name) - 1;
-
-    memcpy(
-        entry.name,
-        nameStart,
-        nameLen
-    );
-
-    entry.name[nameLen] = '\0';
-
-    // --------------------------------------------------------
-    // Save last entry
-    // --------------------------------------------------------
-
-    lastPhonebookEntry = entry;
-
-    // --------------------------------------------------------
-    // VIEW CONTACTS
-    // --------------------------------------------------------
-
-    if (phonebookMenu == PB_MENU_VIEW)
-    {
-        if (phonebookEntryCount < 20)
-        {
-            phonebookEntries[phonebookEntryCount] = entry;
-            phonebookEntryCount++;
-        }
-
-        printPhonebookEntry(entry);
-
-        return;
-    }
-
-    // --------------------------------------------------------
-    // SEARCH CONTACT
-    // --------------------------------------------------------
-
-    if (phonebookMenu == PB_MENU_SEARCH)
-    {
-        if (strcasecmp(
-                entry.name,
-                phonebookName) == 0)
-        {
-            Serial.println();
-            Serial.println("Contact found:");
-
-            printPhonebookEntry(entry);
-
-            lastPhonebookEntry = entry;
-        }
-
-        return;
-    }
-
-    // --------------------------------------------------------
-    // CALL CONTACT
-    // --------------------------------------------------------
-
-    if (phonebookMenu == PB_MENU_CALL)
-    {
-        Serial.println();
-        Serial.println("Contact:");
-
-        printPhonebookEntry(entry);
-
-        Serial.print("Calling ");
-        Serial.println(entry.number);
-
-        phoneNumber = entry.number;
-
-        phonebookMenu = PB_MENU_MAIN;
-        phonebookState = PB_IDLE;
-
-        dial(phoneNumber.c_str());
-
-        return;
-    }
-
-    // --------------------------------------------------------
-    // SINGLE CONTACT READ
-    // --------------------------------------------------------
-
-    if (phonebookState == PB_WAIT_READ)
-    {
-        Serial.println();
-        Serial.println("Contact:");
-
-        printPhonebookEntry(entry);
-    }
-}
-
-
-
-bool SIM800::listPhonebook()
-{
-    if (atCommand.active)
-        return false;
-
-    phonebookEntryCount = 0;
-
-    phonebookState = PB_WAIT_STORAGE;
-
-    return selectPhonebook("SM");
-}
-
-/*bool SIM800::findPhonebook(const char *name,
-                           PhonebookEntry &entry)
-{
-    // This needs to be implemented using the
-    // multi-entry CPBR response handling.
-    return false;
-}*/
-void SIM800::printPhonebookMenu()
-{
-    Serial.println();
-    Serial.println("================================");
-    Serial.println("          PHONEBOOK");
-    Serial.println("================================");
-
-    Serial.println("1. Add Contact");
-    Serial.println("2. View Contacts");
-    Serial.println("3. Delete Contact");
-    Serial.println("4. Search Contact");
-    Serial.println("5. Call Contact");
-    Serial.println("6. Back");
-
-    Serial.println();
-    Serial.print("Select: ");
-}
-void SIM800::printPhonebookEntry(
-    const PhonebookEntry &entry)
-{
-    Serial.print("[");
-
-    Serial.print(entry.index);
-
-    Serial.print("] ");
-
-    Serial.print(entry.name);
-
-    Serial.print(" : ");
-
-    Serial.println(entry.number);
-}
-
-void SIM800::handlePhonebookInput()
-{
-    if (!Serial.available())
-        return;
-
-    String input = Serial.readStringUntil('\n');
-    input.trim();
-
-    switch (phonebookMenu)
-    {
-        // ====================================================
-        // MAIN PHONEBOOK MENU
-        // ====================================================
-
-        case PB_MENU_MAIN:
-
-            if (input == "1")
-            {
-                Serial.println();
-                Serial.println("--- ADD CONTACT ---");
-
-                Serial.println("Enter name:");
-
-                phonebookMenu = PB_MENU_ADD_NAME;
-            }
-
-            else if (input == "2")
-            {
-                Serial.println();
-                Serial.println("--- CONTACTS ---");
-
-                phonebookMenu = PB_MENU_VIEW;
-
-                phonebookEntryCount = 0;
-
-                if (!listPhonebook())
-                {
-                    Serial.println("Unable to read phonebook.");
-                    phonebookMenu = PB_MENU_MAIN;
-                    printPhonebookMenu();
-                }
-            }
-
-            else if (input == "3")
-            {
-                Serial.println();
-                Serial.println("--- DELETE CONTACT ---");
-                Serial.println("Enter contact index:");
-
-                phonebookMenu = PB_MENU_DELETE;
-            }
-
-            else if (input == "4")
-            {
-                Serial.println();
-                Serial.println("--- SEARCH CONTACT ---");
-                Serial.println("Enter name:");
-
-                phonebookMenu = PB_MENU_SEARCH;
-            }
-
-            else if (input == "5")
-            {
-                Serial.println();
-                Serial.println("--- CALL CONTACT ---");
-                Serial.println("Enter contact index:");
-
-                phonebookMenu = PB_MENU_CALL;
-            }
-
-            else if (input == "6")
-            {
-                phonebookMenu = PB_MENU_MAIN;
-                state = WAIT_MODE;
-
-                printMenu();
-            }
-
-            else
-            {
-                Serial.println("Invalid option.");
-                printPhonebookMenu();
-            }
-
-            break;
-
-
-        // ====================================================
-        // ADD CONTACT - NAME
-        // ====================================================
-
-        case PB_MENU_ADD_NAME:
-
-            if (input.length() == 0)
-            {
-                Serial.println("Name cannot be empty.");
-                Serial.println("Enter name:");
-                break;
-            }
-
-            input.toCharArray(
-                phonebookName,
-                sizeof(phonebookName)
-            );
-
-            Serial.println("Enter phone number:");
-            Serial.println("Example: +21612345678");
-
-            phonebookMenu = PB_MENU_ADD_NUMBER;
-
-            break;
-
-
-        // ====================================================
-        // ADD CONTACT - NUMBER
-        // ====================================================
-
-        case PB_MENU_ADD_NUMBER:
-
-            input.toCharArray(
-                phonebookNumber,
-                sizeof(phonebookNumber)
-            );
-
-            if (!validNumber(phonebookNumber))
-            {
-                Serial.println("Invalid phone number.");
-                Serial.println("Example: +21612345678");
-                break;
-            }
-
-            Serial.println("Enter SIM contact index:");
-            Serial.println("Example: 1");
-
-            phonebookMenu = PB_MENU_ADD_INDEX;
-
-            break;
-
-
-        // ====================================================
-        // ADD CONTACT - INDEX
-        // ====================================================
-
-        case PB_MENU_ADD_INDEX:
-        {
-            int index = input.toInt();
-
-            if (index < 1 || index > 250)
-            {
-                Serial.println("Invalid index.");
-                Serial.println("Enter a number between 1 and 250:");
-                break;
-            }
-
-            phonebookIndex = index;
-
-            if (writePhonebook(
-                    phonebookIndex,
-                    phonebookNumber,
-                    phonebookName))
-            {
-                Serial.println("Saving contact...");
-            }
-            else
-            {
-                Serial.println("Unable to save contact.");
-
-                phonebookMenu = PB_MENU_MAIN;
-                printPhonebookMenu();
-            }
-
-            break;
-        }
-
-
-        // ====================================================
-        // DELETE
-        // ====================================================
-
-        case PB_MENU_DELETE:
-        {
-            int index = input.toInt();
-
-            if (index < 1 || index > 250)
-            {
-                Serial.println("Invalid index.");
-                break;
-            }
-
-            phonebookIndex = index;
-
-            if (deletePhonebook(phonebookIndex))
-            {
-                Serial.println("Deleting contact...");
-            }
-            else
-            {
-                Serial.println("Unable to delete contact.");
-
-                phonebookMenu = PB_MENU_MAIN;
-                printPhonebookMenu();
-            }
-
-            break;
-        }
-
-
-        // ====================================================
-        // SEARCH
-        // ====================================================
-
-        case PB_MENU_SEARCH:
-
-            input.toCharArray(
-                phonebookName,
-                sizeof(phonebookName)
-            );
-
-            Serial.println("Searching...");
-
-            /*if (!findPhonebook(
-                    phonebookName,
-                    lastPhonebookEntry))
-            {
-                Serial.println("Unable to search phonebook.");
-                phonebookMenu = PB_MENU_MAIN;
-                printPhonebookMenu();
-            }
-*/
-            break;
-
-
-        // ====================================================
-        // CALL CONTACT
-        // ====================================================
-
-        case PB_MENU_CALL:
-        {
-            int index = input.toInt();
-
-            if (index < 1 || index > 250)
-            {
-                Serial.println("Invalid index.");
-                break;
-            }
-
-            phonebookIndex = index;
-
-            PhonebookEntry entry;
-
-            if (readPhonebook(phonebookIndex, entry))
-            {
-                Serial.println("Reading contact...");
-            }
-            else
-            {
-                Serial.println("Unable to read contact.");
-                phonebookMenu = PB_MENU_MAIN;
-                printPhonebookMenu();
-            }
-
-            break;
-        }
-
-
-        default:
-            phonebookMenu = PB_MENU_MAIN;
-            printPhonebookMenu();
-            break;
-    }
+    state = WAIT_MODE;
+    phonebook.begin();
+    printMenu();
 }
