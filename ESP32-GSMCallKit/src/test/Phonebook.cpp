@@ -1,5 +1,5 @@
 #include "Phonebook.h"
-#include "Encoding.h"
+//#include "Encoding.h"
 
 PhoneBook::PhoneBook(IPhoneBookHost &host)
     : host(host)
@@ -351,7 +351,7 @@ void PhoneBook::handleInput()
 
             phonebookIndex = index;
 
-            PhoneBookEntry entry;
+            
 
             if (read(phonebookIndex))
             {
@@ -840,45 +840,4 @@ void PhoneBook::resetToMainMenu()
     phonebookNumber[0] = '\0';
 
     printMenu();
-}
-
-void PhoneBook::testParseCPBR()
-{
-    Serial.println();
-    Serial.println("================================");
-    Serial.println("      CPBR PARSER TEST");
-    Serial.println("================================");
-
-    PhoneBookEntry entry;
-
-    const char *testLine =
-        "+CPBR: 1,\"+21612345678\",145,\"Alice\"";
-
-    Serial.print("Input: ");
-    Serial.println(testLine);
-
-    bool result = parseCPBR(testLine, entry);
-
-    Serial.print("Parse result: ");
-    Serial.println(result ? "PASS" : "FAIL");
-
-    if (result)
-    {
-        Serial.println();
-        Serial.println("Parsed entry:");
-
-        Serial.print("Index  : ");
-        Serial.println(entry.index);
-
-        Serial.print("Number : ");
-        Serial.println(entry.number);
-
-        Serial.print("Type   : ");
-        Serial.println(entry.type);
-
-        Serial.print("Name   : ");
-        Serial.println(entry.name);
-    }
-
-    Serial.println("================================");
 }

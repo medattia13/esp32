@@ -161,8 +161,19 @@ void SIM800::update()
             }
 else if (strcasecmp(input, "CONTACTS") == 0)
 {
+    Serial.println("DEBUG: CONTACTS detected");
+
     state = PHONEBOOK_MENU;
+
+    Serial.println("DEBUG: state set");
+
     phonebook.open();
+
+    Serial.println("DEBUG: phonebook.open returned");
+}
+else if (strcasecmp(input, "PBTEST") == 0)
+{
+    phonebookTest();
 }
 
             else {
@@ -330,6 +341,7 @@ case PHONEBOOK_MENU:
     break;
 }
 
+
 }
 }
 bool SIM800::dial(const char *number)
@@ -418,6 +430,7 @@ void SIM800::printMenu() {
     Serial.println("READSMS     - Read SMS");
     Serial.println("DEBUG       - AT debug");
     Serial.println("CONTACTS    - Phonebook");
+    Serial.println("PBTEST      - Phonebook DEBUG");
     Serial.println("==========================");
 }
 void SIM800::processLine(const char *line)
@@ -784,4 +797,38 @@ void SIM800::returnToMainMenu()
     state = WAIT_MODE;
     phonebook.begin();
     printMenu();
+}
+// TESTING 
+
+void SIM800::phonebookTest()
+{
+    Serial.println();
+    Serial.println("===== PHONEBOOK PARSER TEST =====");
+
+    PhoneBookEntry entry;
+
+    const char *test =
+        "+CPBR: 1,\"+21612345678\",145,\"Alice\"";
+
+    bool result = phonebook.testParseCPBR(test, entry);
+
+    Serial.print("Result: ");
+    Serial.println(result ? "PASS" : "FAIL");
+
+    if (result)
+    {
+        Serial.print("Index: ");
+        Serial.println(entry.index);
+
+        Serial.print("Number: ");
+        Serial.println(entry.number);
+
+        Serial.print("Type: ");
+        Serial.println(entry.type);
+
+        Serial.print("Name: ");
+        Serial.println(entry.name);
+    }
+
+    Serial.println("================================");
 }
