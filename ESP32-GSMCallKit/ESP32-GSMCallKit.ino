@@ -1,22 +1,3 @@
-
-// 22. Add modem recovery.
-//// 8. Improve call handling.
-// 10. Add modem recovery.
-//     Handle SIM800 reset/restart.
-//     Recover from ERROR state.
-//     Add watchdog protection.
-//     ⏳ FUTURE
-
-//    Add call timeout.
-//    Handle outgoing call failure states.
-//    Handle incoming call answer/reject:
-//        ATA
-//        ATH
-//    ⏳ TODO
-// 23. Add SIM800 reset handling.
-//
-// 24. Add watchdog protection.
-
 #include "src/SIM800.h"
 SIM800 modem;
 

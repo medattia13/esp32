@@ -1,3 +1,10 @@
+//TODO
+//Add modem recovery.
+//     Handle SIM800 reset/restart.
+//     Recover from ERROR state.
+//     Add watchdog protection.
+
+
 #include "SIM800.h"
 #include <ctype.h>
 #include <string.h>
@@ -178,39 +185,100 @@ else if (strcasecmp(input, "CONTACTS") == 0)
         break;
     }
 
-    case DIALING: {
-        if (atFinished()) {
-            if (atResult() == AT_TIMEOUT) {
-                Serial.println("Dial command timeout");
-                state = READY;
-            }
+case DIALING:
+{
+    // Call has been ringing/dialing for too long
+    if (millis() - callStartTime >= CALL_TIMEOUT) {
 
-            atCommand.finished = false;
-        }
+        Serial.println("Call timeout.");
+        Serial.println("Hanging up...");
 
-        if (Serial.available()) {
-            char c = Serial.read();
+        hangup();
 
-            if (c == 'h' || c == 'H') {
-                hangup();
-            }
-        }
+        state = WAIT_MODE;
+        printMenu();
 
         break;
     }
 
-    case IN_CALL: {
-        if (Serial.available()) {
-            char c = Serial.read();
-            if(c=='h'||c=='H')
-            {
-                hangup();
-            }
+    if (atFinished()) {
 
+        if (atResult() == AT_TIMEOUT) {
+            Serial.println("Dial command timeout.");
+
+            state = WAIT_MODE;
+            printMenu();
         }
 
-        break;
+        else if (atResult() == AT_ERROR) {
+            Serial.println("Call failed.");
+
+            state = WAIT_MODE;
+            printMenu();
+        }
+
+        atCommand.finished = false;
     }
+
+    if (Serial.available()) {
+
+        char c = Serial.read();
+
+        if (c == 'h' || c == 'H') {
+            hangup();
+        }
+    }
+
+    break;
+}
+
+case INCOMING_CALL:
+{
+    if (!Serial.available())
+        break;
+
+    char c = Serial.read();
+
+    if (c == 'a' || c == 'A') {
+
+        Serial.println("Answering call...");
+
+        if (sendAT("ATA", 5000)) {
+            // Wait for CONNECT
+        }
+    }
+
+    else if (c == 'h' || c == 'H') {
+
+        Serial.println("Rejecting call...");
+
+        if (sendAT("ATH", 5000)) {
+            // Wait for command result
+        }
+    }
+
+    break;
+}
+
+case IN_CALL:
+{
+    if (Serial.available()) {
+
+        char c = Serial.read();
+
+        if (c == 'h' || c == 'H') {
+
+            Serial.println("Hanging up...");
+
+            if (!hangup()) {
+                Serial.println("Failed to send hangup command.");
+            }
+        }
+    }
+
+    break;
+}
+
 
     case MODEM_ERROR: {
         Serial.println("Modem error");
@@ -357,7 +425,8 @@ bool SIM800::dial(const char *number)
     Serial.print("Calling ");
     Serial.println(number);
 
-    if (sendAT(cmd, 30000)) {
+    if (sendAT(cmd, 7000)) {
+            callStartTime = millis();
         state = DIALING;
         return true;
     }
@@ -474,46 +543,98 @@ void SIM800::processLine(const char *line)
         atCommand.finished = true;
         atCommand.result = AT_OK;
         return;
-    } else if (strcmp(line, "NO CARRIER") == 0) {
-        state = WAIT_MODE;
-        printMenu();
-        atCommand.active = false;
-        atCommand.finished = true;
-        atCommand.result = AT_ERROR;
-        return;
-    } else if (strcmp(line, "BUSY") == 0) {
-        state = WAIT_MODE;
-        printMenu();
+    } 
+    else if (strcmp(line, "NO CARRIER") == 0) {
 
-        atCommand.active = false;
-        atCommand.finished = true;
-        atCommand.result = AT_ERROR;
-        return;
-    } else if (strcmp(line, "RING") == 0) {
-        incomingCall = true;
-        Serial.println("Incoming call");
-        return;
-    } else if (strcmp(line, "NO ANSWER") == 0) {
+    if (state == DIALING) {
+        Serial.println("Call ended or failed.");
+
+    }
+    else if (state == IN_CALL) {
+        Serial.println("Call ended.");
+    }
+    else if (state == INCOMING_CALL) {
+        Serial.println("Incoming call ended.");
+    }
+
+    incomingCall = false;
+callerNumber[0] = '\0';
+
+    state = WAIT_MODE;
+    printMenu();
+
+    atCommand.active = false;
+    atCommand.finished = true;
+    atCommand.result = AT_ERROR;
+
+    return;
+}
+
+     
+    else if (strcmp(line, "BUSY") == 0) {
+
+    Serial.println("Call failed: busy.");
+
+    incomingCall = false;
+
+    state = WAIT_MODE;
+    printMenu();
+
+    atCommand.active = false;
+    atCommand.finished = true;
+    atCommand.result = AT_ERROR;
+
+    return;
+}
+
+else if (strcmp(line, "RING") == 0) {
+    incomingCall = true;
+
+    Serial.println();
+    Serial.println("========== INCOMING CALL ==========");
+
+    if (callerNumber[0] != '\0') {
+        Serial.print("From: ");
+        Serial.println(callerNumber);
+    } else {
+        Serial.println("From: Unknown");
+    }
+
+    Serial.println("A = Answer");
+    Serial.println("H = Reject");
+    Serial.println("===================================");
+
+    state = INCOMING_CALL;
+
+    return;
+}
+
+    else if (strcmp(line, "NO ANSWER") == 0) {
         Serial.println("No answer");
 
         state = WAIT_MODE;
         printMenu();
+callerNumber[0] = '\0';
 
         atCommand.active = false;
         atCommand.finished = true;
         atCommand.result = AT_ERROR;
         return;
-    } else if (strcmp(line, "NO DIALTONE") == 0) {
-        Serial.println("No dial tone");
+    } 
+ else if (strcmp(line, "NO DIALTONE") == 0) {
 
-        state = WAIT_MODE;
-        printMenu();
+    Serial.println("Call failed: no dial tone.");
 
-        atCommand.active = false;
-        atCommand.finished = true;
-        atCommand.result = AT_ERROR;
-        return;
-    }
+    state = WAIT_MODE;
+    printMenu();
+
+    atCommand.active = false;
+    atCommand.finished = true;
+    atCommand.result = AT_ERROR;
+
+    return;
+}
+
 
     else if (strcmp(line, "MO RING") == 0) {
         Serial.println("Remote phone is ringing");
@@ -578,6 +699,31 @@ void SIM800::processLine(const char *line)
         }
 
         return;
+        
+        if (state == INCOMING_CALL) {
+
+    incomingCall = false;
+
+    Serial.println("Call rejected.");
+
+    state = WAIT_MODE;
+    printMenu();
+
+    return;
+}
+
+if (state == IN_CALL) {
+
+    incomingCall = false;
+
+    Serial.println("Call ended.");
+
+    state = WAIT_MODE;
+    printMenu();
+
+    return;
+}
+
     }
 
 

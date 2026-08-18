@@ -10,6 +10,7 @@ enum ModemState { BOOTING,
                   READY, 
                   DIALING, 
                   IN_CALL, 
+                      INCOMING_CALL,
                   MODEM_ERROR,  
                   WAIT_MODE,
                   USSD_INPUT,
@@ -83,7 +84,11 @@ private:
     bool debugMode = false;
     bool incomingCall = false;
     char callerNumber[32];
-    
+   
+   uint32_t callStartTime = 0;
+
+static constexpr uint32_t CALL_TIMEOUT = 30000;
+ 
     PhoneBook phonebook;
 
     void processSerial();
