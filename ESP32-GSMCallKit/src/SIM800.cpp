@@ -131,9 +131,7 @@ void SIM800::update()
 
             input[len] = '\0';
 
-            while (len > 0 && (input[len - 1] == '\r' || input[len - 1] == '\n')) {
-                input[--len] = '\0';
-            }
+cleanInput(input);
 
             if (strcasecmp(input, "DEBUG") == 0) {
                 handleDebugInput();
@@ -762,12 +760,7 @@ void SIM800::handleDebugInput()
     input[len] = '\0';
 
 
-    while (len > 0 &&
-           (input[len-1]=='\r' ||
-            input[len-1]=='\n'))
-    {
-        input[--len]='\0';
-    }
+cleanInput(input);
 
 
     if (strcasecmp(input,"EXIT")==0)
@@ -798,38 +791,15 @@ void SIM800::returnToMainMenu()
     phonebook.begin();
     printMenu();
 }
-// TESTING 
 
-/*void SIM800::phonebookTest()
+void SIM800::cleanInput(char *input)
 {
-    Serial.println();
-    Serial.println("===== PHONEBOOK PARSER TEST =====");
+    size_t len = strlen(input);
 
-    PhoneBookEntry entry;
-
-    const char *test =
-        "+CPBR: 1,\"+21612345678\",145,\"Alice\"";
-
-    bool result = phonebook.testParseCPBR(test, entry);
-
-    Serial.print("Result: ");
-    Serial.println(result ? "PASS" : "FAIL");
-
-    if (result)
+    while (len > 0 &&
+           (input[len - 1] == '\r' ||
+            input[len - 1] == '\n'))
     {
-        Serial.print("Index: ");
-        Serial.println(entry.index);
-
-        Serial.print("Number: ");
-        Serial.println(entry.number);
-
-        Serial.print("Type: ");
-        Serial.println(entry.type);
-
-        Serial.print("Name: ");
-        Serial.println(entry.name);
+        input[--len] = '\0';
     }
-
-    Serial.println("================================");
 }
-*/

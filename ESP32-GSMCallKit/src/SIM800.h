@@ -46,6 +46,7 @@ public:
     void update();
 
     bool sendAT(const char *cmd, uint32_t timeout = 1000) override;
+    
     bool dial(const char *number) override;
     bool validNumber(const char *number) override;
     void returnToMainMenu() override;
@@ -60,6 +61,8 @@ public:
 
     ModemState getModemState();
     SMSState getSMSState();
+    
+    
 private:
     HardwareSerial modem;
 
@@ -91,6 +94,8 @@ private:
 
 
     void checkATTimeout();
+bool queueAT(const char *cmd, uint32_t timeout);
+void processATQueue();
 
    
     bool atFinished();
@@ -98,5 +103,7 @@ private:
     void handleDebugInput();
     void printMenu();
    
+   void cleanInput(char *input);
+
 };
 #endif

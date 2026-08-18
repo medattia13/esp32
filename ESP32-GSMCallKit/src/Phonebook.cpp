@@ -1,3 +1,5 @@
+//TODO: implement the search function
+
 #include "Phonebook.h"
 #include "Encoding.h"
 
@@ -30,14 +32,10 @@ void PhoneBook::begin()
 
 void PhoneBook::open()
 {
-Serial.println("DEBUG: ENTERED PhoneBook::open()");
     menu = PB_MENU_MAIN;
     state = PB_IDLE;
 
     entryCount = 0;
-
-    Serial.println();
-    Serial.println("Opening phonebook...");
 
     printMenu();
 }

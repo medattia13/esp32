@@ -1,16 +1,4 @@
-// TODO
-// Phase 8: Future improvements
-//
-// 21. Add AT command queue.
-//// 5. Move serial input cleanup into separate function.
-//    Create cleanInput() helper.
-//    Remove duplicated '\r'/'\n' cleanup code.
-//    ⏳ NEXT
-// 9. Improve AT command engine.
-//    Add command queue for multiple pending commands.
-//    Store command name/type for debugging.
-//    Add command-specific timeout values.
-//    ⏳ FUTURE
+
 // 22. Add modem recovery.
 //// 8. Improve call handling.
 // 10. Add modem recovery.

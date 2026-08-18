@@ -6,6 +6,9 @@ build/
 bin/
 out/
 
+# Test directories
+test/
+
 # Object files
 *.o
 *.obj
