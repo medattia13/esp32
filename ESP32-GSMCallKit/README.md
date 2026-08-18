@@ -22,7 +22,8 @@ The project started as a simple SIM800 sketch and has been refactored into a reu
   - `CONNECT`
   - `NO CARRIER`
   - `BUSY`
-
+- SMS support
+- Support for Phonebook
 ## Development Status
 
 - Current status:
@@ -33,10 +34,10 @@ The project started as a simple SIM800 sketch and has been refactored into a reu
   - Boot sequence
   - Call handling
   - Non-blocking architecture
-
+  - SMS support
+  
 - Future improvements:
 
-  - SMS support
   - GPRS/data connection
   - Better unsolicited message handling
   - Automatic modem recovery

@@ -90,9 +90,6 @@ public:
     
 
 private:
-    // Allow the offline test class to access private
-    // PhoneBook functions without making them public.
-    friend class PhoneBookTest;
     
     IPhoneBookHost &host;
 
