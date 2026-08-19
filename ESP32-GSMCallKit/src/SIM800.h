@@ -6,23 +6,21 @@
 #include "Phonebook.h"
 
 #include "ATCommand.h"
-enum ModemState { BOOTING, 
-                  READY, 
-                  DIALING, 
-                  IN_CALL, 
-                      INCOMING_CALL,
-                  MODEM_ERROR,  
-                  WAIT_MODE,
-                  USSD_INPUT,
-                  DEBUG_MODE,
-                  CALL_NUMBER,
-                  SMS_NUMBER,
-                  SMS_MESSAGE,
-                  USSD_PENDING, 
-                  PHONEBOOK_MENU
- };
-enum SMSState
-{
+
+enum class ModemState {
+    BOOTING,
+    READY,
+    MODEM_ERROR,
+    MODEM_RECOVERING
+};
+enum class CallState {
+    IDLE,
+    DIALING,
+    IN_CALL,
+    INCOMING_CALL
+};
+
+enum class SMSState {
     SMS_IDLE,
     SMS_WAIT_TEXTMODE,
     SMS_WAIT_CHARSET,
@@ -31,12 +29,20 @@ enum SMSState
     SMS_READING,
     SMS_WAIT_LIST
 };
-enum USSDState
-{
+
+enum class USSDState {
     USSD_IDLE,
     USSD_WAIT_RESULT
 };
-
+enum class UIState {
+    WAIT_MODE,
+    CALL_NUMBER,
+    SMS_NUMBER,
+    SMS_MESSAGE,
+    USSD_PENDING,
+    DEBUG_MODE,
+    PHONEBOOK_MENU
+};
 
 class SIM800 : public IPhoneBookHost
 {
@@ -69,7 +75,13 @@ private:
 
     ATCommand atCommand;
 
-    ModemState state;
+    ModemState state; //to be removed relplaced
+
+    ModemState modemState;
+    CallState callState;
+    SMSState smsState;
+    USSDState ussdState;
+    UIState uiState;
 
     char lineBuffer[128];
     size_t linePos;
@@ -85,7 +97,7 @@ private:
     bool incomingCall = false;
     char callerNumber[32];
    
-   uint32_t callStartTime = 0;
+    uint32_t callStartTime = 0;
 
 static constexpr uint32_t CALL_TIMEOUT = 30000;
  
@@ -97,18 +109,14 @@ static constexpr uint32_t CALL_TIMEOUT = 30000;
     void processSMS(const char *line);
     void processUSSD(const char *line);
 
-
     void checkATTimeout();
-bool queueAT(const char *cmd, uint32_t timeout);
-void processATQueue();
 
-   
     bool atFinished();
     ATResult atResult();
     void handleDebugInput();
     void printMenu();
    
-   void cleanInput(char *input);
+    void cleanInput(char *input);
 
 };
 #endif

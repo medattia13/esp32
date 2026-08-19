@@ -1,4 +1,11 @@
 //TODO
+//1. refactor: add separate modem, call, and UI states
+//2. refactor: move call states to CallState
+//3. refactor: move user input states to UIState
+//4. refactor: isolate modem lifecycle state
+//5. refactor: separate SMS and USSD state handling
+//6. refactor: split update into independent state handlers
+
 //Add modem recovery.
 //     Handle SIM800 reset/restart.
 //     Recover from ERROR state.
