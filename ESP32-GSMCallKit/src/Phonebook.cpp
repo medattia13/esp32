@@ -1,5 +1,3 @@
-//TODO: implement the search function
-
 #include "Phonebook.h"
 #include "Encoding.h"
 
@@ -15,6 +13,7 @@ PhoneBook::PhoneBook(IPhoneBookHost &host)
 
     phonebookName[0] = '\0';
     phonebookNumber[0] = '\0';
+    smsMessage[0] = '\0';
 }
 
 
@@ -27,6 +26,7 @@ void PhoneBook::begin()
 
     phonebookName[0] = '\0';
     phonebookNumber[0] = '\0';
+    smsMessage[0] = '\0';
 }
 
 
@@ -85,7 +85,8 @@ void PhoneBook::printMenu()
     Serial.println("3. Delete Contact");
     Serial.println("4. Search Contact");
     Serial.println("5. Call Contact");
-    Serial.println("6. Back");
+    Serial.println("6. SMS Contact");
+    Serial.println("7. Back");
 
     Serial.println();
     Serial.print("Select: ");
@@ -176,8 +177,15 @@ void PhoneBook::handleInput()
 
                 menu = PB_MENU_CALL;
             }
-
             else if (input == "6")
+            {
+                Serial.println();
+                Serial.println("--- SMS CONTACT ---");
+                Serial.println("Enter contact index:");
+
+                menu = PB_MENU_SMS;
+            }
+            else if (input == "7")
             {
                 host.returnToMainMenu();
             }
@@ -349,8 +357,6 @@ void PhoneBook::handleInput()
 
             phonebookIndex = index;
 
-            PhoneBookEntry entry;
-
             if (read(phonebookIndex))
             {
                 Serial.println("Reading contact...");
@@ -363,7 +369,67 @@ void PhoneBook::handleInput()
 
             break;
         }
+case PB_MENU_SMS:
+{
+    int index = input.toInt();
 
+    if (index < 1 || index > 250)
+    {
+        Serial.println("Invalid index.");
+        break;
+    }
+
+    phonebookIndex = index;
+
+    if (read(phonebookIndex))
+    {
+        Serial.println("Reading contact...");
+    }
+    else
+    {
+        Serial.println("Unable to read contact.");
+        resetToMainMenu();
+    }
+
+    break;
+}
+
+
+case PB_MENU_SMS_MESSAGE:
+{
+    if (input.length() == 0)
+    {
+        Serial.println("Message cannot be empty.");
+        Serial.println("Enter message:");
+        break;
+    }
+
+    input.toCharArray(
+        smsMessage,
+        sizeof(smsMessage)
+    );
+
+    Serial.println();
+    Serial.print("Sending SMS to: ");
+    Serial.println(lastEntry.number);
+
+    if (host.sendSMS(
+            lastEntry.number,
+            smsMessage))
+    {
+        Serial.println("SMS started.");
+    }
+    else
+    {
+        Serial.println("Unable to start SMS.");
+    }
+
+    smsMessage[0] = '\0';
+
+    resetToMainMenu();
+
+    break;
+}
 
         default:
 
@@ -510,7 +576,7 @@ void PhoneBook::onOk()
                 state = PB_WAIT_LIST;
 
                 host.sendAT(
-                    "AT+CPBR=1,20",
+                    "AT+CPBR=1,250",
                     5000
                 );
             }
@@ -568,41 +634,51 @@ void PhoneBook::onOk()
 
             return;
 
+case PB_WAIT_READ:
 
-        case PB_WAIT_READ:
+    if (lastEntry.index != 0)
+    {
+        printEntry(lastEntry);
 
-            /*
-             * The +CPBR line should already have populated
-             * lastEntry.
-             */
+        if (menu == PB_MENU_CALL)
+        {
+            Serial.print("Calling ");
+            Serial.println(lastEntry.number);
 
-            if (lastEntry.index != 0)
+            if (!host.dial(lastEntry.number))
             {
-                printEntry(lastEntry);
-
-                if (menu == PB_MENU_CALL)
-                {
-                    Serial.print("Calling ");
-                    Serial.println(lastEntry.number);
-
-                    host.dial(lastEntry.number);
-
-                    menu = PB_MENU_MAIN;
-                    state = PB_IDLE;
-
-                    return;
-                }
-            }
-            else
-            {
-                Serial.println("Contact not found.");
+                Serial.println("Unable to call contact.");
             }
 
-            resetToMainMenu();
+            menu = PB_MENU_MAIN;
+            state = PB_IDLE;
 
             return;
+        }
+
+        if (menu == PB_MENU_SMS)
+        {
+            Serial.println();
+            Serial.print("SMS to: ");
+            Serial.println(lastEntry.number);
+
+            Serial.println("Enter message:");
+
+            menu = PB_MENU_SMS_MESSAGE;
+            state = PB_IDLE;
 
 
+            return;
+        }
+    }
+    else
+    {
+        Serial.println("Contact not found.");
+    }
+
+    resetToMainMenu();
+
+    return;
         default:
             break;
     }
@@ -774,7 +850,7 @@ void PhoneBook::processLine(const char *line)
 
     if (menu == PB_MENU_VIEW)
     {
-        if (entryCount < 20)
+        if (entryCount < 250)
         {
             entries[entryCount++] = entry;
         }
@@ -822,6 +898,17 @@ void PhoneBook::processLine(const char *line)
 
         return;
     }
+    
+     // --------------------------------------------------------
+    // SMS
+    // --------------------------------------------------------
+
+    if (menu == PB_MENU_SMS)
+    {
+        lastEntry = entry;
+
+        return;
+    }   
 }
 
 
@@ -836,6 +923,7 @@ void PhoneBook::resetToMainMenu()
 
     phonebookName[0] = '\0';
     phonebookNumber[0] = '\0';
+    smsMessage[0] = '\0';
 
     printMenu();
 }

@@ -4,6 +4,8 @@
 #include <Arduino.h>
 #include <stdint.h>
 
+#define PHONEBOOK_SMS_SIZE 161
+
 struct PhoneBookEntry
 {
     uint16_t index;
@@ -34,7 +36,9 @@ enum PhonebookMenu
     PB_MENU_VIEW,
     PB_MENU_DELETE,
     PB_MENU_SEARCH,
-    PB_MENU_CALL
+    PB_MENU_CALL,
+    PB_MENU_SMS,
+    PB_MENU_SMS_MESSAGE
 };
 
 
@@ -49,6 +53,8 @@ public:
 
     virtual bool dial(const char *number) = 0;
 
+    virtual bool sendSMS(const char *number, const char *message) = 0;
+    
     virtual bool validNumber(const char *number) = 0;
 
     virtual void returnToMainMenu() = 0;
@@ -105,6 +111,7 @@ private:
 
     char phonebookName[64];
     char phonebookNumber[32];
+char smsMessage[PHONEBOOK_SMS_SIZE];
 
     void printMenu();
     void printEntry(const PhoneBookEntry &entry);

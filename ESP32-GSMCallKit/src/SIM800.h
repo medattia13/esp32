@@ -1,26 +1,41 @@
+// TODO:
+// - Make Serial input non-blocking.
+// - Consider replacing String with char buffers.
+
 #ifndef SIM800_H
 #define SIM800_H
 
 #include <Arduino.h>
 #include <HardwareSerial.h>
-#include "Phonebook.h"
 
+#include "Phonebook.h"
 #include "ATCommand.h"
 
-enum class ModemState {
+
+
+// ============================================================
+// STATE MACHINES
+// ============================================================
+
+enum class ModemState
+{
     BOOTING,
+    INITIALIZING,
     READY,
     MODEM_ERROR,
     MODEM_RECOVERING
 };
-enum class CallState {
+
+enum class CallState
+{
     IDLE,
     DIALING,
     IN_CALL,
     INCOMING_CALL
 };
 
-enum class SMSState {
+enum class SMSState
+{
     SMS_IDLE,
     SMS_WAIT_TEXTMODE,
     SMS_WAIT_CHARSET,
@@ -30,93 +45,343 @@ enum class SMSState {
     SMS_WAIT_LIST
 };
 
-enum class USSDState {
+enum class USSDState
+{
     USSD_IDLE,
     USSD_WAIT_RESULT
 };
-enum class UIState {
-    WAIT_MODE,
+
+enum class UIState
+{
+    MAIN_MENU,
     CALL_NUMBER,
     SMS_NUMBER,
     SMS_MESSAGE,
-    USSD_PENDING,
-    DEBUG_MODE,
-    PHONEBOOK_MENU
+    USSD_INPUT,
+    USSD_WAIT_RESULT,
+    PHONEBOOK,
+    DEBUG_MODE
 };
+
+
+// ============================================================
+// SIM800
+// ============================================================
 
 class SIM800 : public IPhoneBookHost
 {
 public:
+
     SIM800();
 
     void begin();
     void update();
 
-    bool sendAT(const char *cmd, uint32_t timeout = 1000) override;
-    
-    bool dial(const char *number) override;
-    bool validNumber(const char *number) override;
+    // --------------------------------------------------------
+    // IPhoneBookHost
+    // --------------------------------------------------------
+
+    bool sendAT(
+        const char *cmd,
+        uint32_t timeout = 1000
+        ) override;
+
+    bool dial(
+        const char *number
+        ) override;
+
+    bool validNumber(
+        const char *number
+        ) override;
+
     void returnToMainMenu() override;
-    
+
+
+    // --------------------------------------------------------
+    // Call
+    // --------------------------------------------------------
+
     bool hangup();
 
-    bool sendSMS(const char *number, const char *message);
+
+    // --------------------------------------------------------
+    // SMS
+    // --------------------------------------------------------
+
+    bool sendSMS(
+        const char *number,
+        const char *message
+        );
+
     bool readSMS();
-    bool deleteSMS(uint8_t index);
 
-    bool sendUSSD(String code);
+    bool deleteSMS(
+        uint8_t index
+        );
 
-    ModemState getModemState();
-    SMSState getSMSState();
-    
-    
+
+    // --------------------------------------------------------
+    // USSD
+    // --------------------------------------------------------
+
+    bool sendUSSD(
+        const String &code
+        );
+
+
+    // --------------------------------------------------------
+    // State
+    // --------------------------------------------------------
+
+    ModemState getModemState() const;
+
+    CallState getCallState() const;
+
+    SMSState getSMSState() const;
+
+    USSDState getUSSDState() const;
+
+    UIState getUIState() const;
+
+
 private:
+
+    // ========================================================
+    // HARDWARE / COMPONENTS
+    // ========================================================
+
     HardwareSerial modem;
 
     ATCommand atCommand;
 
-    ModemState state; //to be removed relplaced
-
-    ModemState modemState;
-    CallState callState;
-    SMSState smsState;
-    USSDState ussdState;
-    UIState uiState;
-
-    char lineBuffer[128];
-    size_t linePos;
-    SMSState smsState = SMS_IDLE;
-    String phoneNumber;
-
-    char smsNumber[32];
-    char smsText[161];
-    String message;
-    unsigned long bootStart;
-    uint8_t bootStep;
-    bool debugMode = false;
-    bool incomingCall = false;
-    char callerNumber[32];
-   
-    uint32_t callStartTime = 0;
-
-static constexpr uint32_t CALL_TIMEOUT = 30000;
- 
     PhoneBook phonebook;
 
+
+    // ========================================================
+    // STATE
+    // ========================================================
+
+    ModemState modemState;
+
+    CallState callState;
+
+    SMSState smsState;
+
+    USSDState ussdState;
+
+    UIState uiState;
+
+
+    // ========================================================
+    // MODEM LIFECYCLE
+    // ========================================================
+
+    uint8_t modemInitStep;
+
+    uint8_t recoveryStep;
+
+    uint32_t recoveryStart;
+
+    uint8_t recoveryAttempts;
+
+
+    // ========================================================
+    // SERIAL INPUT
+    // ========================================================
+
+    char lineBuffer[128];
+
+    size_t linePos;
+
+
+    // ========================================================
+    // USER INPUT
+    // ========================================================
+
+    String phoneNumber;
+
+    String message;
+
+
+    // ========================================================
+    // SMS
+    // ========================================================
+
+    char smsNumber[32];
+
+    char smsText[161];
+
+    // SMS reading
+    uint8_t smsReadIndex;
+
+    char smsReadStatus[16];
+
+    char smsReadSender[32];
+
+    char smsReadDate[32];
+
+    bool smsReadingMessage;
+
+
+    // ========================================================
+    // CALL
+    // ========================================================
+
+    char callerNumber[32];
+
+    uint32_t callStartTime;
+
+
+    // ========================================================
+    // MODEM BOOT
+    // ========================================================
+
+    uint32_t bootStart;
+
+    uint8_t bootStep;
+
+
+    // ========================================================
+    // CONSTANTS
+    // ========================================================
+
+    static constexpr uint32_t DIAL_TIMEOUT = 30000;
+
+    static constexpr uint32_t MODEM_BOOT_TIME = 5000;
+
+    static constexpr uint8_t MAX_RECOVERY_ATTEMPTS = 3;
+
+
+    // ========================================================
+    // MAIN STATE MACHINES
+    // ========================================================
+
+    void updateModem();
+
+    void updateCall();
+
+    void updateUI();
+
+
+    // ========================================================
+    // MODEM STATE HANDLERS
+    // ========================================================
+
+    void updateModemBoot();
+
+    void updateModemInitialization();
+
+    void startModemRecovery();
+
+    void updateModemRecovery();
+
+
+    // ========================================================
+    // CALL STATE HANDLERS
+    // ========================================================
+
+    void updateDialingCall();
+
+    void updateIncomingCall();
+
+    void updateActiveCall();
+
+
+    // ========================================================
+    // UI STATE HANDLERS
+    // ========================================================
+
+    void updateUIMainMenu();
+
+    void updateUICallNumber();
+
+    void updateUISMSNumber();
+
+    void updateUISMSMessage();
+
+    void updateUIUSSDInput();
+
+
+    // ========================================================
+    // MODEM RESPONSE DISPATCH
+    // ========================================================
+
     void processSerial();
-    void processLine(const char *line);
-    void processCall(const char *line);
-    void processSMS(const char *line);
-    void processUSSD(const char *line);
+
+    void processLine(
+        const char *line
+        );
+
+
+    // ========================================================
+    // RESPONSE HANDLERS
+    // ========================================================
+
+    bool handleCallLine(
+        const char *line
+        );
+
+    bool handleSMSLine(
+        const char *line
+        );
+
+    bool handleUSSDLine(
+        const char *line
+        );
+
+    bool handlePhonebookLine(
+        const char *line
+        );
+
+    bool handleATResponse(
+        const char *line
+        );
+
+
+    // ========================================================
+    // CALL RESPONSE HELPERS
+    // ========================================================
+
+    void handleCallerID(
+        const char *line
+        );
+
+
+    // ========================================================
+    // SMS HELPERS
+    // ========================================================
+
+    bool parseSMSHeader(
+        const char *line
+        );
+
+
+    void printSMSHeader();
+
+
+    // ========================================================
+    // AT COMMAND
+    // ========================================================
 
     void checkATTimeout();
+    void finishAT(ATResult result);
 
     bool atFinished();
-    ATResult atResult();
-    void handleDebugInput();
-    void printMenu();
-   
-    void cleanInput(char *input);
 
+    ATResult atResult();
+
+
+    // ========================================================
+    // DEBUG / UI
+    // ========================================================
+
+    void handleDebugInput();
+
+    void printMenu();
+
+    void cleanInput(
+        char *input
+        );
 };
+
 #endif
