@@ -1,8 +1,16 @@
-#include "SIM800.h"
+// TODO:
+// - Make Serial input non-blocking.
+// - Consider replacing String with char buffers.
+//From the code you showed, the remaining Phase 1 work I'd consider important is:
+
+  //  ⚠️ Fix AT command ownership/conflicts
+  //  ⚠️ Clean up hangup() so it doesn't forcibly cancel unrelated AT operations
+  //  ⚠️ Finish/verify modem recovery behavior
+  //  ⚠️ Make sure all state transitions are deterministic#include "SIM800.h"
 
 #include <ctype.h>
 #include <string.h>
-
+#include "SIM800.h"
 #define SIM800_RX 16
 #define SIM800_TX 17
 
@@ -39,6 +47,7 @@ SIM800::SIM800()
     , bootStep(0)
 
     , callStartTime(0)
+    , atOwner(ATOwner::NONE)
 {
     lineBuffer[0] = '\0';
 
@@ -76,8 +85,16 @@ void SIM800::begin()
 
 void SIM800::update()
 {
+Serial.print("AT owner: ");
+Serial.println(atOwnerName());
+
     processSerial();
+    Serial.print("AT owner: ");
+Serial.println(atOwnerName());
+
     checkATTimeout();
+Serial.print("AT owner: ");
+Serial.println(atOwnerName());
 
     updateModem();
 
@@ -85,9 +102,17 @@ void SIM800::update()
     // until the modem is fully ready.
     if (modemState != ModemState::READY)
         return;
+Serial.print("AT owner: ");
+Serial.println(atOwnerName());
 
     updateCall();
+    Serial.print("AT owner: ");
+Serial.println(atOwnerName());
+
     updateUI();
+    Serial.print("AT owner: ");
+Serial.println(atOwnerName());
+
 }
 
 
@@ -95,13 +120,15 @@ void SIM800::update()
 // AT commands
 // -----------------------------------------------------------------------------
 
-bool SIM800::sendAT(const char *cmd, uint32_t timeout)
+bool SIM800::sendAT(const char *cmd, uint32_t timeout, ATOwner owner)
 {
     if (atCommand.active)
     {
         Serial.println("AT command busy");
         return false;
     }
+
+    atOwner = owner;
 
     atCommand.active = true;
     atCommand.finished = false;
@@ -118,6 +145,7 @@ bool SIM800::sendAT(const char *cmd, uint32_t timeout)
 
     return true;
 }
+
 
 void SIM800::checkATTimeout()
 {
@@ -143,6 +171,11 @@ void SIM800::finishAT(ATResult result)
 bool SIM800::atFinished()
 {
     return atCommand.finished;
+}
+void SIM800::releaseAT()
+{
+    atCommand.active = false;
+    atOwner = ATOwner::NONE;
 }
 
 ATResult SIM800::atResult()
@@ -175,7 +208,7 @@ bool SIM800::dial(const char *number)
     Serial.print("Calling ");
     Serial.println(number);
 
-    if (!sendAT(cmd, 7000))
+    if (!sendAT(cmd, 7000, ATOwner::CALL))
         return false;
 
     callStartTime = millis();
@@ -188,18 +221,13 @@ bool SIM800::hangup()
 {
     if (atCommand.active)
     {
-        atCommand.active = false;
-        atCommand.finished = false;
+        Serial.println("Cannot hang up: AT command busy.");
+        return false;
     }
-/*maybe use this code instead because hand forces at
-    if (callState == CallState::IDLE)
-        return false;
 
-    if (atCommand.active)
-        return false;
-*/
-    return sendAT("ATH", 5000);
+    return sendAT("ATH", 5000,ATOwner::CALL );
 }
+
 
 bool SIM800::sendSMS(const char *number, const char *text)
 {
@@ -236,7 +264,7 @@ bool SIM800::sendSMS(const char *number, const char *text)
 
     Serial.println("Starting SMS...");
 
-    if (!sendAT("AT+CMGF=1", 3000))
+    if (!sendAT("AT+CMGF=1", 3000,ATOwner::SMS))
     {
         Serial.println("Could not start AT+CMGF=1");
         return false;
@@ -274,7 +302,7 @@ bool SIM800::readSMS()
     /*
      * Put modem into text mode first.
      */
-    if (!sendAT("AT+CMGF=1", 3000))
+    if (!sendAT("AT+CMGF=1", 3000,ATOwner::SMS))
         return false;
 
     smsState = SMSState::SMS_READING;
@@ -295,7 +323,7 @@ bool SIM800::deleteSMS(uint8_t index)
 
     snprintf(cmd, sizeof(cmd), "AT+CMGD=%u", index);
 
-    return sendAT(cmd, 5000);
+    return sendAT(cmd, 5000,ATOwner::SMS);
 }
 // -----------------------------------------------------------------------------
 // SMS line handling
@@ -404,7 +432,7 @@ bool SIM800::handleSMSLine(const char *line)
             finishAT(AT_OK);
             smsState = SMSState::SMS_WAIT_CHARSET;
 
-            if (!sendAT("AT+CSCS=\"GSM\"", 3000))
+            if (!sendAT("AT+CSCS=\"GSM\"", 3000,ATOwner::SMS))
             {
                 smsState = SMSState::SMS_IDLE;
 
@@ -430,7 +458,7 @@ bool SIM800::handleSMSLine(const char *line)
                 smsNumber
                 );
 
-            if (!sendAT(cmd, 5000))
+            if (!sendAT(cmd, 5000, ATOwner::SMS))
             {
                 smsState = SMSState::SMS_IDLE;
 
@@ -477,7 +505,7 @@ bool SIM800::handleSMSLine(const char *line)
 
     smsReadingMessage = false;
 
-    if (!sendAT("AT+CMGL=\"ALL\"", 15000))
+    if (!sendAT("AT+CMGL=\"ALL\"", 15000,ATOwner::SMS))
     {
         smsState = SMSState::SMS_IDLE;
 
@@ -649,7 +677,7 @@ bool SIM800::sendUSSD(const String &code)
         code.c_str()
         );
 
-    if (!sendAT(cmd, 10000))
+    if (!sendAT(cmd, 10000,ATOwner::USSD))
         return false;
 
     ussdState = USSDState::USSD_WAIT_RESULT;
@@ -885,7 +913,7 @@ bool SIM800::handleATResponse(const char *line)
         atCommand.finished = true;
         atCommand.result = AT_OK;
 
-        if (phonebook.isBusy())
+        if (atOwner == ATOwner::PHONEBOOK)
         {
             phonebook.onOk();
             return true;
@@ -900,7 +928,7 @@ bool SIM800::handleATResponse(const char *line)
         atCommand.finished = true;
         atCommand.result = AT_ERROR;
 
-        if (phonebook.isBusy())
+        if (atOwner == ATOwner::PHONEBOOK)
         {
             phonebook.onError();
             return true;
@@ -994,14 +1022,14 @@ void SIM800::updateIncomingCall()
     {
         Serial.println("Answering call...");
 
-        if (!sendAT("ATA", 5000))
+        if (!sendAT("ATA", 5000,ATOwner::CALL))
             Serial.println("Unable to answer call.");
     }
     else if (c == 'h' || c == 'H')
     {
         Serial.println("Rejecting call...");
 
-        if (!sendAT("ATH", 5000))
+        if (!sendAT("ATH", 5000,ATOwner::CALL))
             Serial.println("Unable to reject call.");
     }
 }
@@ -1076,7 +1104,7 @@ void SIM800::updateModemBoot()
             return;
         }
 
-        if (!sendAT(cmd, 3000))
+        if (!sendAT(cmd, 3000,ATOwner::MODEM))
             return;
     }
 
@@ -1149,7 +1177,7 @@ void SIM800::updateModemInitialization()
         return;
     }
 
-    if (!sendAT(cmd, 3000))
+    if (!sendAT(cmd, 3000,ATOwner::MODEM))
         modemState = ModemState::MODEM_ERROR;
 }
 
@@ -1477,7 +1505,7 @@ void SIM800::handleDebugInput()
         return;
     }
 
-    if (!sendAT(input, 10000))
+    if (!sendAT(input, 10000,ATOwner::DEBUG))
         Serial.println("AT command busy.");
 }
 
@@ -1531,4 +1559,34 @@ bool SIM800::validNumber(const char *num)
     }
 
     return true;
+}
+
+//debugging helper
+const char* SIM800::atOwnerName() 
+{
+    switch (atOwner)
+    {
+    case ATOwner::NONE:
+        return "NONE";
+
+    case ATOwner::MODEM:
+        return "MODEM";
+
+    case ATOwner::CALL:
+        return "CALL";
+
+    case ATOwner::SMS:
+        return "SMS";
+
+    case ATOwner::USSD:
+        return "USSD";
+
+    case ATOwner::PHONEBOOK:
+        return "PHONEBOOK";
+
+    case ATOwner::DEBUG:
+        return "DEBUG";
+    }
+
+    return "UNKNOWN";
 }

@@ -1,8 +1,8 @@
-#ifndef PHONEBOOK_H
-#define PHONEBOOK_H
+#pragma once
 
 #include <Arduino.h>
 #include <stdint.h>
+#include "ATOwner.h"
 
 #define PHONEBOOK_SMS_SIZE 161
 
@@ -49,7 +49,7 @@ enum PhonebookMenu
 class IPhoneBookHost
 {
 public:
-    virtual bool sendAT(const char *cmd, uint32_t timeout) = 0;
+    virtual bool sendAT(const char *cmd, uint32_t timeout, ATOwner owner) = 0;
 
     virtual bool dial(const char *number) = 0;
 
@@ -111,7 +111,7 @@ private:
 
     char phonebookName[64];
     char phonebookNumber[32];
-char smsMessage[PHONEBOOK_SMS_SIZE];
+    char smsMessage[PHONEBOOK_SMS_SIZE];
 
     void printMenu();
     void printEntry(const PhoneBookEntry &entry);
@@ -141,5 +141,3 @@ char smsMessage[PHONEBOOK_SMS_SIZE];
 
     void resetToMainMenu();
 };
-
-#endif

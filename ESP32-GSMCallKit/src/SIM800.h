@@ -1,21 +1,18 @@
-// TODO:
-// - Make Serial input non-blocking.
-// - Consider replacing String with char buffers.
-
-#ifndef SIM800_H
-#define SIM800_H
+#pragma once
 
 #include <Arduino.h>
 #include <HardwareSerial.h>
 
 #include "Phonebook.h"
 #include "ATCommand.h"
+#include "ATOwner.h"
 
 
 
 // ============================================================
 // STATE MACHINES
 // ============================================================
+
 
 enum class ModemState
 {
@@ -81,10 +78,7 @@ public:
     // IPhoneBookHost
     // --------------------------------------------------------
 
-    bool sendAT(
-        const char *cmd,
-        uint32_t timeout = 1000
-        ) override;
+    bool sendAT(const char *cmd, uint32_t timeout, ATOwner owner) override;
 
     bool dial(
         const char *number
@@ -365,10 +359,11 @@ private:
 
     void checkATTimeout();
     void finishAT(ATResult result);
-
+void releaseAT();
     bool atFinished();
 
     ATResult atResult();
+ATOwner atOwner;
 
 
     // ========================================================
@@ -379,9 +374,7 @@ private:
 
     void printMenu();
 
-    void cleanInput(
-        char *input
-        );
+    void cleanInput(char *input );
+    const char* atOwnerName();
+    
 };
-
-#endif
