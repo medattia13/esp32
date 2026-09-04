@@ -7,7 +7,8 @@
   //  ⚠️ Clean up hangup() so it doesn't forcibly cancel unrelated AT operations
   //  ⚠️ Finish/verify modem recovery behavior
   //  ⚠️ Make sure all state transitions are deterministic#include "SIM800.h"
-
+// ater readsms success i get AT command timeout
+// when selecting the send sms in contacts menu, i can't exit when puttin invalid index, blocking
 #include <ctype.h>
 #include <string.h>
 #include "SIM800.h"
@@ -85,34 +86,16 @@ void SIM800::begin()
 
 void SIM800::update()
 {
-Serial.print("AT owner: ");
-Serial.println(atOwnerName());
-
     processSerial();
-    Serial.print("AT owner: ");
-Serial.println(atOwnerName());
-
     checkATTimeout();
-Serial.print("AT owner: ");
-Serial.println(atOwnerName());
-
     updateModem();
 
     // Don't allow the other state machines to operate
     // until the modem is fully ready.
     if (modemState != ModemState::READY)
         return;
-Serial.print("AT owner: ");
-Serial.println(atOwnerName());
-
     updateCall();
-    Serial.print("AT owner: ");
-Serial.println(atOwnerName());
-
     updateUI();
-    Serial.print("AT owner: ");
-Serial.println(atOwnerName());
-
 }
 
 
@@ -142,7 +125,8 @@ bool SIM800::sendAT(const char *cmd, uint32_t timeout, ATOwner owner)
     Serial.println(cmd);
 
     modem.println(cmd);
-
+    Serial.print("AT owner: ");
+    Serial.println(atOwnerName());
     return true;
 }
 
