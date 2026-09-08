@@ -50,6 +50,7 @@ class IPhoneBookHost
 {
 public:
     virtual bool sendAT(const char *cmd, uint32_t timeout, ATOwner owner) = 0;
+    virtual void releaseAT() = 0;
 
     virtual bool dial(const char *number) = 0;
 
@@ -58,7 +59,10 @@ public:
     virtual bool validNumber(const char *number) = 0;
 
     virtual void returnToMainMenu() = 0;
-
+    
+    virtual bool readUserLine(char *buffer, size_t size) = 0;
+    
+    
     virtual ~IPhoneBookHost() {}
 
 };
@@ -103,8 +107,9 @@ private:
     PhonebookMenu menu;
 
     PhoneBookEntry lastEntry;
+static constexpr uint8_t MAX_ENTRIES = 20;
+PhoneBookEntry entries[MAX_ENTRIES];
 
-    PhoneBookEntry entries[20];
     uint8_t entryCount;
 
     uint8_t phonebookIndex;
@@ -131,8 +136,6 @@ private:
     bool read(uint8_t index);
 
     bool list();
-
-    void handleEntry(const PhoneBookEntry &entry);
 
     bool parseCPBR(
         const char *line,

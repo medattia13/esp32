@@ -1,14 +1,3 @@
-// TODO:
-// - Make Serial input non-blocking.
-// - Consider replacing String with char buffers.
-//From the code you showed, the remaining Phase 1 work I'd consider important is:
-
-  //  ⚠️ Fix AT command ownership/conflicts
-  //  ⚠️ Clean up hangup() so it doesn't forcibly cancel unrelated AT operations
-  //  ⚠️ Finish/verify modem recovery behavior
-  //  ⚠️ Make sure all state transitions are deterministic#include "SIM800.h"
-// ater readsms success i get AT command timeout
-// when selecting the send sms in contacts menu, i can't exit when puttin invalid index, blocking
 #include <ctype.h>
 #include <string.h>
 #include "SIM800.h"
@@ -48,6 +37,7 @@ SIM800::SIM800()
     , bootStep(0)
 
     , callStartTime(0)
+    , hangupPending(false)
     , atOwner(ATOwner::NONE)
 {
     lineBuffer[0] = '\0';
@@ -105,9 +95,10 @@ void SIM800::update()
 
 bool SIM800::sendAT(const char *cmd, uint32_t timeout, ATOwner owner)
 {
-    if (atCommand.active)
+    if (atCommand.active || atCommand.finished)
     {
-        Serial.println("AT command busy");
+        Serial.print("AT command busy. Owner: ");
+        Serial.println(atOwnerName());
         return false;
     }
 
@@ -125,11 +116,12 @@ bool SIM800::sendAT(const char *cmd, uint32_t timeout, ATOwner owner)
     Serial.println(cmd);
 
     modem.println(cmd);
+
     Serial.print("AT owner: ");
     Serial.println(atOwnerName());
+
     return true;
 }
-
 
 void SIM800::checkATTimeout()
 {
@@ -138,15 +130,26 @@ void SIM800::checkATTimeout()
 
     if (millis() - atCommand.startTime > atCommand.timeout)
     {
+        Serial.print("AT command timeout. Owner=");
+        Serial.print(atOwnerName());
+        Serial.print(" SMS state=");
+        Serial.print((int)smsState);
+        Serial.print(" Call state=");
+        Serial.print((int)callState);
+        Serial.print(" UI state=");
+        Serial.println((int)uiState);
+
         atCommand.active = false;
         atCommand.finished = true;
         atCommand.result = AT_TIMEOUT;
-
-        Serial.println("AT command timeout");
     }
 }
+
 void SIM800::finishAT(ATResult result)
 {
+    if (!atCommand.active)
+        return;
+
     atCommand.active = false;
     atCommand.finished = true;
     atCommand.result = result;
@@ -159,8 +162,14 @@ bool SIM800::atFinished()
 void SIM800::releaseAT()
 {
     atCommand.active = false;
+    atCommand.finished = false;
+    atCommand.result = AT_TIMEOUT;
+    atCommand.length = 0;
+    atCommand.response[0] = '\0';
+
     atOwner = ATOwner::NONE;
 }
+
 
 ATResult SIM800::atResult()
 {
@@ -182,9 +191,11 @@ bool SIM800::dial(const char *number)
     if (callState != CallState::IDLE)
         return false;
 
-    if (atCommand.active)
-        return false;
+if (atCommand.active || atCommand.finished)
+    return false;
 
+
+    hangupPending = false;
     char cmd[48];
 
     snprintf(cmd, sizeof(cmd), "ATD%s;", number);
@@ -203,14 +214,62 @@ bool SIM800::dial(const char *number)
 
 bool SIM800::hangup()
 {
+    // Nothing to hang up.
+    if (callState == CallState::IDLE)
+        return false;
+
+    // A CALL-owned AT command is currently running.
+    // Do not cancel it. Queue the hangup instead.
     if (atCommand.active)
     {
-        Serial.println("Cannot hang up: AT command busy.");
+        if (atOwner == ATOwner::CALL)
+        {
+            Serial.println(
+                "Hangup requested; waiting for current call AT command."
+            );
+
+            hangupPending = true;
+            return true;
+        }
+
+        Serial.print(
+            "Cannot hang up: AT channel owned by "
+        );
+        Serial.println(atOwnerName());
+
         return false;
     }
 
-    return sendAT("ATH", 5000,ATOwner::CALL );
+    // A CALL command has finished but its result has not yet
+    // been consumed by the call state machine.
+    if (atCommand.finished)
+    {
+        if (atOwner == ATOwner::CALL)
+        {
+            Serial.println(
+                "Hangup requested; waiting for CALL result to be consumed."
+            );
+
+            hangupPending = true;
+            return true;
+        }
+
+        Serial.print(
+            "Cannot hang up: AT result owned by "
+        );
+        Serial.println(atOwnerName());
+
+        return false;
+    }
+
+    // AT channel is completely free.
+    if (!sendAT("ATH", 5000, ATOwner::CALL))
+        return false;
+
+    return true;
 }
+
+
 
 
 bool SIM800::sendSMS(const char *number, const char *text)
@@ -227,8 +286,9 @@ bool SIM800::sendSMS(const char *number, const char *text)
         return false;
     }
 
-    if (atCommand.active)
-        return false;
+if (atCommand.active || atCommand.finished)
+    return false;
+
 
     strncpy(
         smsNumber,
@@ -266,7 +326,8 @@ bool SIM800::readSMS()
         return false;
     }
 
-    if (atCommand.active)
+    if (atCommand.active || atCommand.finished)
+
     {
         Serial.println("AT command busy.");
         return false;
@@ -299,9 +360,9 @@ bool SIM800::deleteSMS(uint8_t index)
 {
     if (smsState != SMSState::SMS_IDLE)
         return false;
+if (atCommand.active || atCommand.finished)
+    return false;
 
-    if (atCommand.active)
-        return false;
 
     char cmd[32];
 
@@ -356,25 +417,17 @@ bool SIM800::handleSMSLine(const char *line)
         if (smsState != SMSState::SMS_WAIT_LIST)
             return false;
 
-        /*
-         * Parse:
-         *
-         * +CMGL: index,"status","number","","date"
-         */
         if (!parseSMSHeader(line))
         {
             Serial.println("Unable to parse SMS header.");
 
             smsReadingMessage = false;
-
             return true;
         }
 
         printSMSHeader();
 
-        /*
-         * The next modem line is the message body.
-         */
+        // The next line is the message body.
         smsReadingMessage = true;
 
         return true;
@@ -382,7 +435,195 @@ bool SIM800::handleSMSLine(const char *line)
 
 
     // ========================================================
+    // IMPORTANT:
+    // Handle terminal responses BEFORE SMS MESSAGE BODY.
+    // Otherwise the final "OK" gets consumed as the message.
+    // ========================================================
+
+    if (strcmp(line, "OK") == 0)
+    {
+      if (atOwner != ATOwner::SMS || !atCommand.active)
+        return false;
+
+        switch (smsState)
+        {
+        // ----------------------------------------------------
+        // AT+CMGF=1 finished while sending SMS
+        // ----------------------------------------------------
+
+        case SMSState::SMS_WAIT_TEXTMODE:
+        {
+ if (atResult() != AT_OK)
+    {
+        consumeAT();
+        smsState = SMSState::SMS_IDLE;
+        returnToMainMenu();
+        return true;
+    }
+
+    consumeAT();
+
+            smsState = SMSState::SMS_WAIT_CHARSET;
+
+            if (!sendAT(
+                    "AT+CSCS=\"GSM\"",
+                    3000,
+                    ATOwner::SMS))
+            {
+                smsState = SMSState::SMS_IDLE;
+                returnToMainMenu();
+            }
+
+            return true;
+        }
+
+
+        // ----------------------------------------------------
+        // AT+CSCS finished
+        // ----------------------------------------------------
+
+        case SMSState::SMS_WAIT_CHARSET:
+        {
+            // The previous command has completed.
+             if (atResult() != AT_OK)
+    {
+        consumeAT();
+        smsState = SMSState::SMS_IDLE;
+        returnToMainMenu();
+        return true;
+    }
+
+    consumeAT();
+
+            char cmd[64];
+
+            snprintf(
+                cmd,
+                sizeof(cmd),
+                "AT+CMGS=\"%s\"",
+                smsNumber
+            );
+
+            if (!sendAT(
+                    cmd,
+                    5000,
+                    ATOwner::SMS))
+            {
+                smsState = SMSState::SMS_IDLE;
+                returnToMainMenu();
+                return true;
+            }
+
+            smsState = SMSState::SMS_WAIT_PROMPT;
+
+            return true;
+        }
+
+
+        // ----------------------------------------------------
+        // SMS send completed
+        // ----------------------------------------------------
+
+        case SMSState::SMS_WAIT_RESULT:
+        {
+             if (atResult() != AT_OK)
+    {
+        consumeAT();
+        smsState = SMSState::SMS_IDLE;
+        returnToMainMenu();
+        return true;
+    }
+
+    consumeAT();
+
+            smsNumber[0] = '\0';
+            smsText[0] = '\0';
+
+            smsState = SMSState::SMS_IDLE;
+
+            Serial.println("SMS sent successfully.");
+
+            returnToMainMenu();
+
+            return true;
+        }
+
+
+        // ----------------------------------------------------
+        // AT+CMGF=1 finished while reading SMS
+        // ----------------------------------------------------
+
+        case SMSState::SMS_READING:
+        {
+             if (atResult() != AT_OK)
+    {
+        consumeAT();
+        smsState = SMSState::SMS_IDLE;
+        returnToMainMenu();
+        return true;
+    }
+
+    consumeAT();
+
+            smsState = SMSState::SMS_WAIT_LIST;
+            smsReadingMessage = false;
+
+            if (!sendAT(
+                    "AT+CMGL=\"ALL\"",
+                    15000,
+                    ATOwner::SMS))
+            {
+                smsState = SMSState::SMS_IDLE;
+
+                Serial.println("Unable to read SMS list.");
+
+                returnToMainMenu();
+            }
+
+            return true;
+        }
+
+
+        // ----------------------------------------------------
+        // AT+CMGL="ALL" finished
+        // ----------------------------------------------------
+
+case SMSState::SMS_WAIT_LIST:
+{
+    if (atOwner != ATOwner::SMS || !atCommand.active)
+        return true;
+
+    finishAT(AT_OK);
+
+    smsReadingMessage = false;
+
+    smsReadStatus[0] = '\0';
+    smsReadSender[0] = '\0';
+    smsReadDate[0] = '\0';
+
+    smsState = SMSState::SMS_IDLE;
+
+    consumeAT();
+
+    Serial.println();
+    Serial.println("Finished reading SMS.");
+
+    returnToMainMenu();
+
+    return true;
+}
+
+
+        default:
+            break;
+        }
+    }
+
+
+    // ========================================================
     // SMS MESSAGE BODY
+    //
+    // This MUST come AFTER OK handling.
     // ========================================================
 
     if (smsState == SMSState::SMS_WAIT_LIST &&
@@ -400,139 +641,6 @@ bool SIM800::handleSMSLine(const char *line)
 
 
     // ========================================================
-    // SMS COMMAND RESPONSE
-    // ========================================================
-
-    if (strcmp(line, "OK") == 0)
-    {
-        switch (smsState)
-        {
-            // ------------------------------------------------
-            // Finished AT+CMGF=1 while sending SMS
-            // ------------------------------------------------
-
-        case SMSState::SMS_WAIT_TEXTMODE:
-        {
-            finishAT(AT_OK);
-            smsState = SMSState::SMS_WAIT_CHARSET;
-
-            if (!sendAT("AT+CSCS=\"GSM\"", 3000,ATOwner::SMS))
-            {
-                smsState = SMSState::SMS_IDLE;
-
-                returnToMainMenu();
-            }
-
-            return true;
-        }
-
-
-            // ------------------------------------------------
-            // Finished AT+CSCS
-            // ------------------------------------------------
-
-        case SMSState::SMS_WAIT_CHARSET:
-        {
-            char cmd[64];
-
-            snprintf(
-                cmd,
-                sizeof(cmd),
-                "AT+CMGS=\"%s\"",
-                smsNumber
-                );
-
-            if (!sendAT(cmd, 5000, ATOwner::SMS))
-            {
-                smsState = SMSState::SMS_IDLE;
-
-                returnToMainMenu();
-
-                return true;
-            }
-
-            smsState = SMSState::SMS_WAIT_PROMPT;
-
-            return true;
-        }
-
-
-            // ------------------------------------------------
-            // SMS sent
-            // ------------------------------------------------
-
-        case SMSState::SMS_WAIT_RESULT:
-        {
-            smsNumber[0] = '\0';
-            smsText[0] = '\0';
-
-            smsState = SMSState::SMS_IDLE;
-
-            Serial.println("SMS sent successfully.");
-
-            returnToMainMenu();
-
-            return true;
-        }
-
-
-            // ------------------------------------------------
-            // AT+CMGF=1 finished while reading SMS
-            // ------------------------------------------------
-
-        case SMSState::SMS_READING:
-{
-    // AT+CMGF=1 has completed.
-    finishAT(AT_OK);
-
-    smsState = SMSState::SMS_WAIT_LIST;
-
-    smsReadingMessage = false;
-
-    if (!sendAT("AT+CMGL=\"ALL\"", 15000,ATOwner::SMS))
-    {
-        smsState = SMSState::SMS_IDLE;
-
-        Serial.println("Unable to read SMS list.");
-
-        returnToMainMenu();
-    }
-
-    return true;
-}
-
-
-
-            // ------------------------------------------------
-            // Finished SMS list
-            // ------------------------------------------------
-
-        case SMSState::SMS_WAIT_LIST:
-        {
-            smsReadingMessage = false;
-
-            smsReadStatus[0] = '\0';
-            smsReadSender[0] = '\0';
-            smsReadDate[0] = '\0';
-
-            smsState = SMSState::SMS_IDLE;
-
-            Serial.println();
-            Serial.println("Finished reading SMS.");
-
-            returnToMainMenu();
-
-            return true;
-        }
-
-
-        default:
-            break;
-        }
-    }
-
-
-    // ========================================================
     // SMS ERROR
     // ========================================================
 
@@ -540,6 +648,8 @@ bool SIM800::handleSMSLine(const char *line)
     {
         if (smsState != SMSState::SMS_IDLE)
         {
+            finishAT(AT_ERROR);
+
             smsState = SMSState::SMS_IDLE;
 
             smsNumber[0] = '\0';
@@ -550,10 +660,6 @@ bool SIM800::handleSMSLine(const char *line)
             smsReadDate[0] = '\0';
 
             smsReadingMessage = false;
-
-            atCommand.active = false;
-            atCommand.finished = true;
-            atCommand.result = AT_ERROR;
 
             Serial.println("SMS operation failed.");
 
@@ -568,6 +674,7 @@ bool SIM800::handleSMSLine(const char *line)
 
     return false;
 }
+
 
 
 void SIM800::printSMSHeader()
@@ -646,8 +753,9 @@ bool SIM800::sendUSSD(const String &code)
     if (ussdState != USSDState::USSD_IDLE)
         return false;
 
-    if (atCommand.active)
-        return false;
+if (atCommand.active || atCommand.finished)
+    return false;
+
 
     if (code.length() == 0)
         return false;
@@ -724,20 +832,29 @@ void SIM800::processLine(const char *line)
     Serial.print("<< ");
     Serial.println(line);
 
+    // 1. Unsolicited call events
     if (handleCallLine(line))
         return;
 
-    if (handleSMSLine(line))
+    // 2. SMS-specific responses
+    if (atOwner == ATOwner::SMS &&
+        handleSMSLine(line))
         return;
 
-    if (handleUSSDLine(line))
+    // 3. USSD-specific responses
+    if (atOwner == ATOwner::USSD &&
+        handleUSSDLine(line))
         return;
 
-    if (handlePhonebookLine(line))
+    // 4. Phonebook-specific responses
+    if (atOwner == ATOwner::PHONEBOOK &&
+        handlePhonebookLine(line))
         return;
 
+    // 5. Generic AT transaction
     handleATResponse(line);
 }
+
 
 // -----------------------------------------------------------------------------
 // Call line handling
@@ -775,42 +892,53 @@ bool SIM800::handleCallLine(const char *line)
         return true;
     }
 
-    if (strcmp(line, "CONNECT") == 0)
+if (strcmp(line, "CONNECT") == 0)
+{
+    callState = CallState::IN_CALL;
+
+    if (atOwner == ATOwner::CALL &&
+        atCommand.active)
     {
-        callState = CallState::IN_CALL;
-
-        atCommand.active = false;
-        atCommand.finished = true;
-        atCommand.result = AT_OK;
-
-        return true;
+        finishAT(AT_OK);
+        consumeAT();
     }
 
-    if (strcmp(line, "NO CARRIER") == 0 ||
-        strcmp(line, "BUSY") == 0 ||
-        strcmp(line, "NO ANSWER") == 0 ||
-        strcmp(line, "NO DIALTONE") == 0)
+    return true;
+}
+
+
+
+if (strcmp(line, "NO CARRIER") == 0 ||
+    strcmp(line, "BUSY") == 0 ||
+    strcmp(line, "NO ANSWER") == 0 ||
+    strcmp(line, "NO DIALTONE") == 0)
+{
+    if (strcmp(line, "BUSY") == 0)
+        Serial.println("Call failed: busy.");
+    else if (strcmp(line, "NO ANSWER") == 0)
+        Serial.println("Call not answered.");
+    else if (strcmp(line, "NO DIALTONE") == 0)
+        Serial.println("Call failed: no dial tone.");
+    else
+        Serial.println("Call ended.");
+
+    if (atOwner == ATOwner::CALL &&
+        atCommand.active)
     {
-        if (strcmp(line, "BUSY") == 0)
-            Serial.println("Call failed: busy.");
-        else if (strcmp(line, "NO ANSWER") == 0)
-            Serial.println("Call not answered.");
-        else if (strcmp(line, "NO DIALTONE") == 0)
-            Serial.println("Call failed: no dial tone.");
-        else
-            Serial.println("Call ended.");
-
-        callState = CallState::IDLE;
-        callerNumber[0] = '\0';
-
-        atCommand.active = false;
-        atCommand.finished = true;
-        atCommand.result = AT_ERROR;
-
-        returnToMainMenu();
-
-        return true;
+        finishAT(AT_ERROR);
+        consumeAT();
     }
+
+    callState = CallState::IDLE;
+    callerNumber[0] = '\0';
+    hangupPending = false;
+
+    returnToMainMenu();
+
+    return true;
+}
+
+
 
     return false;
 }
@@ -857,19 +985,24 @@ bool SIM800::handleUSSDLine(const char *line)
     if (strncmp(line, "+CUSD:", 6) != 0)
         return false;
 
+    if (atOwner != ATOwner::USSD ||
+        !atCommand.active)
+        return false;
+
     Serial.println("USSD reply:");
     Serial.println(line);
 
+    finishAT(AT_OK);
+
     ussdState = USSDState::USSD_IDLE;
 
-    atCommand.active = false;
-    atCommand.finished = true;
-    atCommand.result = AT_OK;
+    consumeAT();
 
     returnToMainMenu();
 
     return true;
 }
+
 
 // -----------------------------------------------------------------------------
 // Phonebook line handling
@@ -891,57 +1024,51 @@ bool SIM800::handlePhonebookLine(const char *line)
 
 bool SIM800::handleATResponse(const char *line)
 {
+    // No command is waiting for a terminal response.
+    if (!atCommand.active)
+        return false;
+
     if (strcmp(line, "OK") == 0)
     {
-        atCommand.active = false;
-        atCommand.finished = true;
-        atCommand.result = AT_OK;
+    
+        finishAT(AT_OK);
 
         if (atOwner == ATOwner::PHONEBOOK)
-        {
             phonebook.onOk();
-            return true;
-        }
 
         return true;
     }
 
     if (strcmp(line, "ERROR") == 0)
     {
-        atCommand.active = false;
-        atCommand.finished = true;
-        atCommand.result = AT_ERROR;
+        finishAT(AT_ERROR);
 
         if (atOwner == ATOwner::PHONEBOOK)
-        {
             phonebook.onError();
-            return true;
-        }
 
         return true;
     }
 
-    if (atCommand.active)
+    size_t len = strlen(line);
+
+    if (atCommand.length + len + 2 <
+        sizeof(atCommand.response))
     {
-        size_t len = strlen(line);
+        memcpy(
+            &atCommand.response[atCommand.length],
+            line,
+            len
+        );
 
-        if (atCommand.length + len + 2 <
-            sizeof(atCommand.response))
-        {
-            strcpy(
-                &atCommand.response[atCommand.length],
-                line
-                );
+        atCommand.length += len;
 
-            atCommand.length += len;
-
-            atCommand.response[atCommand.length++] = '\n';
-            atCommand.response[atCommand.length] = '\0';
-        }
+        atCommand.response[atCommand.length++] = '\n';
+        atCommand.response[atCommand.length] = '\0';
     }
 
-    return false;
+    return true;
 }
+
 
 // -----------------------------------------------------------------------------
 // Call state machine
@@ -949,6 +1076,35 @@ bool SIM800::handleATResponse(const char *line)
 
 void SIM800::updateCall()
 {
+    // A hangup was requested while a CALL-owned AT command
+    // was executing. Wait until that transaction is completely
+    // consumed before sending ATH.
+if (hangupPending)
+{
+    if (atCommand.active)
+        return;
+
+    if (atCommand.finished)
+    {
+        if (atOwner == ATOwner::CALL)
+            consumeAT();
+        else
+        {
+            hangupPending = false;
+            return;
+        }
+    }
+
+    hangupPending = false;
+
+    if (sendAT("ATH", 5000, ATOwner::CALL))
+        return;
+
+    Serial.println("Unable to send queued hangup.");
+    return;
+}
+
+
     switch (callState)
     {
     case CallState::IDLE:
@@ -967,6 +1123,8 @@ void SIM800::updateCall()
         break;
     }
 }
+
+
 
 void SIM800::updateDialingCall()
 {
@@ -1095,18 +1253,21 @@ void SIM800::updateModemBoot()
     if (!atFinished())
         return;
 
-    if (atResult() != AT_OK)
-    {
-        Serial.println("SIM800 boot failed.");
+if (atResult() != AT_OK)
+{
+    Serial.println("SIM800 boot failed.");
 
-        atCommand.finished = false;
-        modemState = ModemState::MODEM_ERROR;
+    consumeAT();
 
-        return;
-    }
+    modemState = ModemState::MODEM_ERROR;
 
-    atCommand.finished = false;
-    bootStep++;
+    return;
+}
+
+consumeAT();
+
+bootStep++;
+
 }
 
 void SIM800::updateModemInitialization()
@@ -1114,21 +1275,22 @@ void SIM800::updateModemInitialization()
     if (atCommand.active)
         return;
 
-    if (atCommand.finished)
+if (atCommand.finished)
+{
+    if (atResult() != AT_OK)
     {
-        if (atResult() != AT_OK)
-        {
-            Serial.println("SIM800 initialization failed.");
+        Serial.println("SIM800 initialization failed.");
 
-            atCommand.finished = false;
-            modemState = ModemState::MODEM_ERROR;
+        consumeAT();
 
-            return;
-        }
-
-        atCommand.finished = false;
-        modemInitStep++;
+        modemState = ModemState::MODEM_ERROR;
+        return;
     }
+
+    consumeAT();
+    modemInitStep++;
+}
+
 
     const char *cmd = nullptr;
 
@@ -1170,9 +1332,6 @@ void SIM800::updateModemInitialization()
 // -----------------------------------------------------------------------------
 void SIM800::startModemRecovery()
 {
-    if (modemState == ModemState::MODEM_RECOVERING)
-        return;
-
     if (recoveryAttempts >= MAX_RECOVERY_ATTEMPTS)
     {
         Serial.println("SIM800 recovery failed permanently.");
@@ -1182,55 +1341,47 @@ void SIM800::startModemRecovery()
     Serial.println();
     Serial.println("SIM800 recovery starting...");
 
-    atCommand.active = false;
-    atCommand.finished = false;
-
-    callState = CallState::IDLE;
-    smsState = SMSState::SMS_IDLE;
-    ussdState = USSDState::USSD_IDLE;
-
-    callerNumber[0] = '\0';
+    abortOperations();
 
     recoveryStep = 0;
     recoveryStart = millis();
-
     recoveryAttempts++;
 
     modemState = ModemState::MODEM_RECOVERING;
 }
 
+
 void SIM800::updateModemRecovery()
 {
     switch (recoveryStep)
     {
-    case 0:
-        Serial.println("Attempting modem restart...");
+case 0:
+    Serial.println("Attempting modem restart...");
 
-        modem.println("AT+CFUN=1,1");
-        atCommand.active = false;
-        atCommand.finished = false;
-        recoveryStart = millis();
-        recoveryStep = 1;
+    releaseAT();
 
-        break;
+    modem.println("AT+CFUN=1,1");
 
-    case 1:
-        if (millis() - recoveryStart < MODEM_BOOT_TIME)
-            return;
+    recoveryStart = millis();
+    recoveryStep = 1;
+    break;
 
-        Serial.println("Retrying modem communication.");
 
-        bootStep = 0;
-        modemInitStep = 0;
+case 1:
+    if (millis() - recoveryStart < MODEM_BOOT_TIME)
+        return;
 
-        bootStart = millis();
+    Serial.println("Retrying modem communication.");
 
-        atCommand.active = false;
-        atCommand.finished = false;
+    bootStep = 0;
+    modemInitStep = 0;
+    bootStart = millis();
 
-        modemState = ModemState::BOOTING;
+    releaseAT();
 
-        break;
+    modemState = ModemState::BOOTING;
+    break;
+
 
     default:
         modemState = ModemState::MODEM_ERROR;
@@ -1284,48 +1435,55 @@ void SIM800::updateUIMainMenu()
     if (!Serial.available())
         return;
 
-    String input = Serial.readStringUntil('\n');
+    char input[64];
 
-    input.trim();
-    input.toUpperCase();
+    if (!readUserLine(input, sizeof(input)))
+        return;
 
-    if (input == "CALL")
+    cleanInput(input);
+
+    for (size_t i = 0; input[i] != '\0'; i++)
+    {
+        input[i] = toupper((unsigned char)input[i]);
+    }
+
+    if (strcmp(input, "CALL") == 0)
     {
         Serial.println("Enter phone number:");
         Serial.println("Example: +21612345678");
 
         uiState = UIState::CALL_NUMBER;
     }
-    else if (input == "SMS")
+    else if (strcmp(input, "SMS") == 0)
     {
         Serial.println("Phone number:");
 
         uiState = UIState::SMS_NUMBER;
     }
-    else if (input == "USSD")
+    else if (strcmp(input, "USSD") == 0)
     {
         Serial.println("Enter USSD code:");
 
         uiState = UIState::USSD_INPUT;
     }
-    else if (input == "READSMS")
+    else if (strcmp(input, "READSMS") == 0)
     {
         if (!readSMS())
             Serial.println("Unable to read SMS.");
     }
-    else if (input == "DEBUG")
+    else if (strcmp(input, "DEBUG") == 0)
     {
         Serial.println("Entering DEBUG mode.");
         Serial.println("Type EXIT to leave.");
 
         uiState = UIState::DEBUG_MODE;
     }
-    else if (input == "CONTACTS")
+    else if (strcmp(input, "CONTACTS") == 0)
     {
         uiState = UIState::PHONEBOOK;
         phonebook.open();
     }
-    else if (input == "HANG")
+    else if (strcmp(input, "HANG") == 0)
     {
         if (!hangup())
             Serial.println("Unable to hang up.");
@@ -1338,56 +1496,67 @@ void SIM800::updateUIMainMenu()
 
 void SIM800::updateUICallNumber()
 {
-    if (!Serial.available())
+    char input[32];
+
+    if (!readUserLine(input, sizeof(input)))
         return;
 
-    String number = Serial.readStringUntil('\n');
-    number.trim();
+    cleanInput(input);
 
-    if (dial(number.c_str()))
+    if (dial(input))
     {
         phoneNumber = "";
-
-        // CallState now owns the call.
         uiState = UIState::MAIN_MENU;
     }
     else
     {
         Serial.println("Invalid phone number.");
-
         returnToMainMenu();
     }
 }
+
 
 void SIM800::updateUISMSNumber()
 {
-    if (!Serial.available())
+    char input[32];
+
+    if (!readUserLine(input, sizeof(input)))
         return;
 
-    phoneNumber = Serial.readStringUntil('\n');
-    phoneNumber.trim();
+    cleanInput(input);
 
-    if (!validNumber(phoneNumber.c_str()))
+    if (!validNumber(input))
     {
         Serial.println("Invalid phone number.");
+        Serial.println("Returning to main menu.");
 
         returnToMainMenu();
-
         return;
     }
 
-    Serial.println("Message:");
+    phoneNumber = input;
 
+    Serial.println("Message:");
     uiState = UIState::SMS_MESSAGE;
 }
 
+
 void SIM800::updateUISMSMessage()
 {
-    if (!Serial.available())
+    char input[161];
+
+    if (!readUserLine(input, sizeof(input)))
         return;
 
-    message = Serial.readStringUntil('\n');
-    message.trim();
+    cleanInput(input);
+
+    if (input[0] == '\0')
+    {
+        Serial.println("Message cannot be empty.");
+        return;
+    }
+
+    message = input;
 
     if (!sendSMS(
             phoneNumber.c_str(),
@@ -1395,8 +1564,10 @@ void SIM800::updateUISMSMessage()
     {
         Serial.println("Unable to start SMS.");
 
-        returnToMainMenu();
+        phoneNumber = "";
+        message = "";
 
+        returnToMainMenu();
         return;
     }
 
@@ -1404,25 +1575,33 @@ void SIM800::updateUISMSMessage()
     message = "";
 }
 
+
 void SIM800::updateUIUSSDInput()
 {
-    if (!Serial.available())
+    char input[64];
+
+    if (!readUserLine(input, sizeof(input)))
         return;
 
-    String code = Serial.readStringUntil('\n');
-    code.trim();
+    cleanInput(input);
 
-    if (!sendUSSD(code))
+    if (input[0] == '\0')
+    {
+        Serial.println("Invalid USSD code.");
+        returnToMainMenu();
+        return;
+    }
+
+    if (!sendUSSD(input))
     {
         Serial.println("USSD failed.");
-
         returnToMainMenu();
-
         return;
     }
 
     Serial.println("Waiting for USSD reply...");
 }
+
 
 
 // -----------------------------------------------------------------------------
@@ -1465,33 +1644,30 @@ void SIM800::cleanInput(char *input)
 
 void SIM800::handleDebugInput()
 {
-    if (!Serial.available())
-        return;
-
     char input[64];
 
-    size_t len = Serial.readBytesUntil(
-        '\n',
-        input,
-        sizeof(input) - 1
-        );
-
-    input[len] = '\0';
+    if (!readUserLine(input, sizeof(input)))
+        return;
 
     cleanInput(input);
+
+    if (input[0] == '\0')
+        return;
 
     if (strcasecmp(input, "EXIT") == 0)
     {
         Serial.println("Leaving debug mode.");
 
         returnToMainMenu();
-
         return;
     }
 
-    if (!sendAT(input, 10000,ATOwner::DEBUG))
+    if (!sendAT(input, 10000, ATOwner::DEBUG))
+    {
         Serial.println("AT command busy.");
+    }
 }
+
 
 // -----------------------------------------------------------------------------
 // Public state getters
@@ -1574,3 +1750,82 @@ const char* SIM800::atOwnerName()
 
     return "UNKNOWN";
 }
+
+bool SIM800::readUserLine(char *buffer, size_t size)
+{
+    while (Serial.available())
+    {
+        char c = Serial.read();
+
+        if (c == '\r')
+            continue;
+
+        if (c == '\n')
+        {
+            if (uiInputPos == 0)
+                continue;
+
+            uiInput[uiInputPos] = '\0';
+
+            strncpy(buffer, uiInput, size - 1);
+            buffer[size - 1] = '\0';
+
+            uiInputPos = 0;
+            uiInput[0] = '\0';
+
+            return true;
+        }
+
+        if (uiInputPos < sizeof(uiInput) - 1)
+        {
+            uiInput[uiInputPos++] = c;
+        }
+        else
+        {
+            // Input too long: discard current line.
+            uiInputPos = 0;
+            uiInput[0] = '\0';
+
+            Serial.println("Input too long.");
+        }
+    }
+
+    return false;
+}
+
+void SIM800::abortOperations()
+{
+    Serial.println("Aborting all modem operations.");
+
+    callState = CallState::IDLE;
+    smsState = SMSState::SMS_IDLE;
+    ussdState = USSDState::USSD_IDLE;
+
+    hangupPending = false;
+
+    callerNumber[0] = '\0';
+
+    smsNumber[0] = '\0';
+    smsText[0] = '\0';
+
+    smsReadingMessage = false;
+
+    phoneNumber = "";
+    message = "";
+
+    uiState = UIState::MAIN_MENU;
+
+    releaseAT();
+}
+
+void SIM800::consumeAT()
+{
+    atCommand.active = false;
+    atCommand.finished = false;
+    atCommand.result = AT_TIMEOUT;
+    atCommand.length = 0;
+    atCommand.response[0] = '\0';
+
+    atOwner = ATOwner::NONE;
+}
+

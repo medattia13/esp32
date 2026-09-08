@@ -1,51 +1,54 @@
 # ESP32 SIM800 Modem Driver
 
-A lightweight non-blocking SIM800 modem driver for ESP32 using UART AT commands.
+A lightweight, non-blocking SIM800 modem driver for ESP32 using UART AT commands.
 
-The project started as a simple SIM800 sketch and has been refactored into a reusable C++ class architecture with a modem state machine, AT command engine, UART parser, and call handling.
+The project uses a reusable C++ architecture with separate state machines for modem initialization, calls, SMS, USSD, and phonebook operations.
 
 ## Features
 
-- ESP32 UART communication with SIM800 module
-- Non-blocking modem state machine
-- AT command engine with timeout handling
-- Line-based UART response parser
-- SIM800 boot sequence handling
-- Modem initialization sequence
-- Voice call support
-  - Dial numbers
-  - Hang up calls
+- ESP32 UART communication with SIM800
+- Non-blocking state-machine architecture
+- AT command handling with timeouts and ownership
+- UART response parsing
+- Modem boot, initialization, and recovery
+- Voice calls
+  - Dial, answer, and hang up
+  - Incoming call detection
   - Call state tracking
+- SMS
+  - Send, read, and delete
+- USSD support
+- Phonebook
+  - Add, view, search, delete, call, and SMS contacts
 - Phone number validation
-- Support for unsolicited modem responses:
-  - `RING`
-  - `CONNECT`
-  - `NO CARRIER`
-  - `BUSY`
-- SMS support
-- Support for Phonebook
+- Handling of unsolicited responses such as `RING`, `CONNECT`, `BUSY`, and `NO CARRIER`
+
 ## Development Status
 
-- Current status:
+### Implemented
 
-  - ART communication
-  - AT command handling
-  - Response parser
-  - Boot sequence
-  - Call handling
-  - Non-blocking architecture
-  - SMS support
-  
-- Future improvements:
+- AT command engine
+- UART parser
+- Modem state machine
+- Call handling
+- SMS handling
+- USSD handling
+- Phonebook handling
+- Modem recovery
+- Non-blocking architecture
 
-  - GPRS/data connection
-  - Better unsolicited message handling
-  - Automatic modem recovery
-  - Multiple AT command queue
+### Future Improvements
+
+- GPRS/data support
+- More robust unsolicited response handling
+- AT command queue
+- Improved SMS/phonebook encoding support
 
 ## Development Notes
 
-This project was developed with the assistance of AI tools for code review, debugging, and architectural discussion. All code was tested and adapted for the target ESP32/SIM800 hardware.
+The project was developed with assistance from AI tools for code review, debugging, and architectural discussion. Code was tested and adapted for the target ESP32/SIM800 hardware.
 
 ## License
+
 Personal project / educational use.
+
