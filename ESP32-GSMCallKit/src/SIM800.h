@@ -17,7 +17,8 @@ enum class ModemState
     INITIALIZING,
     READY,
     MODEM_ERROR,
-    MODEM_RECOVERING
+    MODEM_RECOVERING,
+    MODEM_FAILED
 };
 
 enum class CallState
@@ -54,7 +55,8 @@ enum class UIState
     USSD_INPUT,
     USSD_WAIT_RESULT,
     PHONEBOOK,
-    DEBUG_MODE
+    DEBUG_MODE,
+    MODEM_RECOVERY
 };
 
 // ============================================================
@@ -188,7 +190,7 @@ bool hangupPending;
     // ========================================================
 
     static constexpr uint32_t DIAL_TIMEOUT = 30000;
-    static constexpr uint32_t MODEM_BOOT_TIME = 5000;
+    static constexpr uint32_t MODEM_BOOT_TIME = 10000;
     static constexpr uint8_t MAX_RECOVERY_ATTEMPTS = 3;
 
     // ========================================================
@@ -225,6 +227,7 @@ bool hangupPending;
     void updateUISMSNumber();
     void updateUISMSMessage();
     void updateUIUSSDInput();
+    void updateUIDebug();
 
     // ========================================================
     // MODEM RESPONSE DISPATCH
@@ -263,9 +266,15 @@ bool hangupPending;
     void checkATTimeout();
     void finishAT(ATResult result);
     bool atFinished();
-
+    void consumeAT();
     ATResult atResult();
     ATOwner atOwner;
+        // ========================================================
+    // MODEM RECOVERY / UI
+    // ========================================================
+
+void updateUIModemRecovery();
+void printRecoveryMenu();
 
     // ========================================================
     // DEBUG / UI

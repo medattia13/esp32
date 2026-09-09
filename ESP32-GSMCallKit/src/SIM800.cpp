@@ -1,3 +1,8 @@
+//to do 
+//SIM800 recovery failed permanently. printed on end
+//readsms doesn't show anything
+// at comands stays busy ater entering ate comand in debug
+
 #include <ctype.h>
 #include <string.h>
 #include "SIM800.h"
@@ -74,16 +79,25 @@ void SIM800::begin()
     bootStart = millis();
 }
 
+
 void SIM800::update()
 {
     processSerial();
     checkATTimeout();
     updateModem();
 
-    // Don't allow the other state machines to operate
-    // until the modem is fully ready.
+    // Recovery UI must remain available even when
+    // the modem is not READY.
+    if (uiState == UIState::MODEM_RECOVERY)
+    {
+        updateUI();
+        return;
+    }
+
+    // Normal UI/features require a ready modem.
     if (modemState != ModemState::READY)
         return;
+
     updateCall();
     updateUI();
 }
@@ -701,26 +715,31 @@ bool SIM800::parseSMSHeader(const char *line)
     if (line == nullptr)
         return false;
 
-    // Expected format:
-    // +CMGL: index,"status","number","","date"
-
     int index = 0;
 
     char status[32] = "";
-    char sender[32] = "";
-    char date[32] = "";
+    char sender[64] = "";
+    char alpha[64] = "";
+    char date[40] = "";
 
     int parsed = sscanf(
         line,
-        "+CMGL: %d,\"%31[^\"]\",\"%31[^\"]\",\"\",\"%31[^\"]\"",
+        "+CMGL: %d,\"%31[^\"]\",\"%63[^\"]\",\"%63[^\"]\",\"%39[^\"]\"",
         &index,
         status,
         sender,
+        alpha,
         date
     );
 
-    if (parsed != 4)
+    if (parsed != 5)
+    {
+        Serial.println("SMS header parse failed.");
+        Serial.print("Header was: ");
+        Serial.println(line);
+
         return false;
+    }
 
     smsReadIndex = index;
 
@@ -1218,8 +1237,13 @@ void SIM800::updateModem()
     case ModemState::MODEM_RECOVERING:
         updateModemRecovery();
         break;
+
+    case ModemState::MODEM_FAILED:
+        // Waiting for user interaction.
+        break;
     }
 }
+
 
 void SIM800::updateModemBoot()
 {
@@ -1255,7 +1279,21 @@ void SIM800::updateModemBoot()
 
 if (atResult() != AT_OK)
 {
-    Serial.println("SIM800 boot failed.");
+    Serial.print("SIM800 boot command failed. bootStep=");
+    Serial.print(bootStep);
+
+    Serial.print(" result=");
+    Serial.println((int)atResult());
+
+    if (atCommand.response[0] != '\0')
+    {
+        Serial.println("Response received:");
+        Serial.print(atCommand.response);
+    }
+    else
+    {
+        Serial.println("No response received.");
+    }
 
     consumeAT();
 
@@ -1263,6 +1301,7 @@ if (atResult() != AT_OK)
 
     return;
 }
+
 
 consumeAT();
 
@@ -1332,11 +1371,17 @@ if (atCommand.finished)
 // -----------------------------------------------------------------------------
 void SIM800::startModemRecovery()
 {
-    if (recoveryAttempts >= MAX_RECOVERY_ATTEMPTS)
-    {
-        Serial.println("SIM800 recovery failed permanently.");
-        return;
-    }
+if (recoveryAttempts >= MAX_RECOVERY_ATTEMPTS)
+{
+    Serial.println();
+    Serial.println("SIM800 automatic recovery failed.");
+modemState = ModemState::MODEM_FAILED;
+    uiState = UIState::MODEM_RECOVERY;
+
+    printRecoveryMenu();
+
+    return;
+}
 
     Serial.println();
     Serial.println("SIM800 recovery starting...");
@@ -1424,12 +1469,15 @@ void SIM800::updateUI()
         phonebook.update();
         break;
 
-    case UIState::DEBUG_MODE:
-        handleDebugInput();
-        break;
-    }
-}
+case UIState::DEBUG_MODE:
+    updateUIDebug();
+    break;
+case UIState::MODEM_RECOVERY:
+    updateUIModemRecovery();
+    break;
 
+}
+}
 void SIM800::updateUIMainMenu()
 {
     if (!Serial.available())
@@ -1829,3 +1877,182 @@ void SIM800::consumeAT()
     atOwner = ATOwner::NONE;
 }
 
+void SIM800::updateUIDebug()
+{
+    // First consume the result of the previous DEBUG AT command.
+    if (atCommand.finished)
+    {
+        Serial.println();
+
+        if (atResult() == AT_OK)
+            Serial.println("AT command completed: OK");
+        else if (atResult() == AT_ERROR)
+            Serial.println("AT command completed: ERROR");
+        else
+            Serial.println("AT command completed: TIMEOUT");
+
+        if (atCommand.response[0] != '\0')
+        {
+            Serial.println("Response:");
+            Serial.print(atCommand.response);
+        }
+
+        consumeAT();
+        return;
+    }
+
+    // Do not accept another command while one is running.
+    if (atCommand.active)
+        return;
+
+    handleDebugInput();
+}
+void SIM800::printRecoveryMenu()
+{
+    Serial.println();
+    Serial.println("========== MODEM RECOVERY ==========");
+    Serial.println("R = Retry recovery");
+    Serial.println("B = Reboot modem");
+    Serial.println("A = Test AT communication");
+    Serial.println("S = Show modem status");
+    Serial.println("X = Stop recovery");
+    Serial.println("====================================");
+}
+void SIM800::updateUIModemRecovery()
+{
+    if (atCommand.finished)
+    {
+        Serial.println();
+
+        if (atResult() == AT_OK)
+        {
+            Serial.println("AT communication: OK");
+            Serial.println("Modem is responding.");
+
+            consumeAT();
+
+            return;
+        }
+
+        if (atResult() == AT_ERROR)
+        {
+            Serial.println("AT communication: ERROR");
+        }
+        else
+        {
+            Serial.println("AT communication: TIMEOUT");
+        }
+
+        consumeAT();
+
+        printRecoveryMenu();
+
+        return;
+    }
+
+    if (atCommand.active)
+        return;
+
+    if (!Serial.available())
+        return;
+
+    char c = Serial.read();
+
+    if (c == '\r' || c == '\n')
+        return;
+
+    c = toupper((unsigned char)c);
+
+    switch (c)
+    {
+case 'R':
+    Serial.println("Starting automatic recovery...");
+
+    recoveryAttempts = 0;
+    recoveryStep = 0;
+    recoveryStart = millis();
+
+    modemState = ModemState::MODEM_ERROR;
+
+    break;
+
+
+case 'B':
+    Serial.println("Forcing modem reboot...");
+
+    abortOperations();
+
+    recoveryAttempts = 0;
+    recoveryStep = 0;
+    recoveryStart = millis();
+
+    modemState = ModemState::MODEM_RECOVERING;
+
+    break;
+
+
+    case 'A':
+        Serial.println("Testing AT communication...");
+
+        if (!atCommand.active && !atCommand.finished)
+        {
+            sendAT("AT", 3000, ATOwner::MODEM);
+        }
+        else
+        {
+            Serial.println("AT command already active.");
+        }
+
+        break;
+
+
+    case 'S':
+        Serial.println();
+        Serial.println("========== MODEM STATUS ==========");
+
+        Serial.print("Modem state       : ");
+        Serial.println((int)modemState);
+
+        Serial.print("Recovery step     : ");
+        Serial.println(recoveryStep);
+
+        Serial.print("Recovery attempts : ");
+        Serial.println(recoveryAttempts);
+
+        Serial.print("AT active         : ");
+        Serial.println(atCommand.active ? "YES" : "NO");
+
+        Serial.print("AT finished       : ");
+        Serial.println(atCommand.finished ? "YES" : "NO");
+
+        Serial.print("AT owner          : ");
+        Serial.println(atOwnerName());
+
+        Serial.println("==================================");
+
+        break;
+
+
+    case 'X':
+        Serial.println("Stopping modem recovery.");
+
+        releaseAT();
+
+        modemState = ModemState::MODEM_ERROR;
+
+        Serial.println(
+            "Modem remains offline. "
+            "Press R to retry."
+        );
+
+        printRecoveryMenu();
+
+        break;
+
+
+    default:
+        Serial.println("Unknown recovery command.");
+        printRecoveryMenu();
+        break;
+    }
+}
